@@ -5,3 +5,5 @@ beautifulsoup4
 lxml
 boto3
 python-dotenv
+serpapi
+google-search-results

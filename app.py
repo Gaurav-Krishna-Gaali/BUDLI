@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
 from script import scrape_device_data
+from trends_helper import fetch_trend_metrics
 
 
 def _best_effort_utf8_stdio() -> None:
@@ -195,8 +196,11 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
     if not fieldnames:
         raise HTTPException(status_code=400, detail="CSV has no header row.")
 
+    # Ensure output columns exist.
     if "predicted_price" not in fieldnames:
         fieldnames.append("predicted_price")
+    if "velocity" not in fieldnames:
+        fieldnames.append("velocity")
 
     output_buf = io.StringIO()
     writer = csv.DictWriter(output_buf, fieldnames=fieldnames)
@@ -222,7 +226,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
             f"Warranty: {warranty_months} months\n"
         )
 
-        # Simple search query for Ovantica.
+        # Simple search query for Ovantica and Google Trends.
         search_query = " ".join(x for x in [brand, model, f"{storage_gb}GB"] if x)
         logger.info(
             "Row %d: querying '%s' (brand=%s, model=%s, storage=%sGB)",
@@ -238,10 +242,33 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
             logger.info(
                 "Row %d: scraped %d devices from Ovantica", idx, len(scraped_devices)
             )
+
+            # Fetch Google Trends metrics (best-effort, optional).
+            trends = fetch_trend_metrics(search_query)
+            if trends:
+                logger.info(
+                    "Row %d: Google Trends latest=%s recent_avg=%.2f overall_avg=%.2f direction=%s",
+                    idx,
+                    trends.get("latest"),
+                    trends.get("recent_avg"),
+                    trends.get("overall_avg"),
+                    trends.get("direction"),
+                )
+                trends_summary = (
+                    f"Google Trends (normalized 0-100) for '{search_query}': "
+                    f"latest={trends.get('latest')}, "
+                    f"recent_avg={trends.get('recent_avg')}, "
+                    f"overall_avg={trends.get('overall_avg')}, "
+                    f"direction={trends.get('direction')}."
+                )
+            else:
+                trends_summary = "Google Trends data unavailable."
+                logger.info("Row %d: no Google Trends data", idx)
         except Exception as e:
             logger.exception("Row %d: scrape failed: %s", idx, e)
-            # On scrape failure, leave predicted_price empty but keep the row.
+            # On scrape failure, leave model-driven fields empty but keep the row.
             row["predicted_price"] = ""
+            row["velocity"] = ""
             writer.writerow(row)
             continue
 
@@ -250,7 +277,8 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
             "You are Budli's Pricing Intelligence AI.\n\n"
             "You receive:\n"
             "- Device attributes (brand, model, storage, condition, warranty, RAM, network type)\n"
-            "- External market signals from scraped listings (price and title list in JSON).\n\n"
+            "- External market signals from scraped listings (price and title list in JSON).\n"
+            "- Search demand signals from Google Trends (normalized 0-100 indices over the last 12 months).\n\n"
             "For the given device and signals, decide a competitive selling strategy.\n\n"
             "Return ONLY a JSON object with the following fields:\n\n"
             "1. recommended_price: number (in INR, no currency symbol, e.g. 28999)\n"
@@ -260,15 +288,23 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
             "Pricing guidelines:\n"
             "- Start from the central tendency of scraped prices.\n"
             "- Adjust downward for worse condition or weaker warranty vs typical, upward for better.\n"
-            "- Use demand signals (number of scraped listings, any obvious discounts) to decide how aggressive to be.\n"
+            "- Use demand signals (number of scraped listings, Google Trends direction and magnitude, any obvious discounts)\n"
+            "  to decide how aggressive to be, especially for the velocity classification.\n"
             "- Ensure recommended_price is not unreasonably far from both market average and lowest competitor unless clearly justified.\n"
         )
 
         try:
             logger.info("Row %d: sending %d scraped devices to Bedrock", idx, len(scraped_devices))
             analysis_text = analyze_with_bedrock(
-                devices=scraped_devices,
-                query=query_string,
+                devices=[
+                    {
+                        "name": d.get("name"),
+                        "price": d.get("price"),
+                        "link": d.get("link"),
+                    }
+                    for d in scraped_devices
+                ],
+                query=query_string + "\n\n" + trends_summary,
                 instructions=instructions,
                 model_id=None,
                 region=None,
@@ -276,15 +312,20 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
                 temperature=0.1,
             )
             predicted_price: Optional[str] = ""
+            velocity: Optional[str] = ""
             try:
                 parsed = json.loads(analysis_text)
                 value = parsed.get("recommended_price")
+                vel_value = parsed.get("velocity")
                 if value is not None:
                     predicted_price = str(value)
                     logger.info("Row %d: predicted_price=%s", idx, predicted_price)
+                if vel_value is not None:
+                    velocity = str(vel_value)
+                    logger.info("Row %d: velocity=%s", idx, velocity)
                 else:
                     logger.warning(
-                        "Row %d: analysis JSON missing 'recommended_price': %s",
+                        "Row %d: analysis JSON missing 'recommended_price' and/or 'velocity': %s",
                         idx,
                         analysis_text,
                     )
@@ -296,11 +337,14 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
                     analysis_text,
                 )
                 predicted_price = ""
+                velocity = ""
 
             row["predicted_price"] = predicted_price
+            row["velocity"] = velocity
         except Exception as bedrock_err:
             logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
             row["predicted_price"] = ""
+            row["velocity"] = ""
 
         writer.writerow(row)
 

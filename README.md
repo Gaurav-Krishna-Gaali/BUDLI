@@ -29,6 +29,9 @@ AWS_REGION=us-east-1
 # Bedrock model configuration
 BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
 BEDROCK_REGION=us-east-1
+
+# SerpAPI (Google Trends)
+SERPAPI_API_KEY=your_serpapi_key
 ```
 
 ## Run
