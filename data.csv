@@ -1,0 +1,11 @@
+brand,model,ram_gb,storage_gb,network_type,condition_tier,warranty_months
+Apple,iPhone 13,4,128,5G,Good,6
+Apple,iPhone 12,4,64,5G,Fair,3
+Samsung,Galaxy S21,8,128,5G,Good,6
+Samsung,Galaxy S20 FE,8,128,5G,Good,6
+OnePlus,9R,8,128,5G,Good,6
+Xiaomi,Mi 11X,6,128,5G,Good,3
+Apple,iPhone 11,4,64,4G,Fair,3
+Samsung,Galaxy A52,6,128,4G,Good,6
+OnePlus,Nord CE,8,128,5G,Good,6
+Realme,GT Neo 3,8,128,5G,Good,3
