@@ -2,6 +2,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
 from script import scrape_device_data
@@ -18,6 +19,17 @@ def _best_effort_utf8_stdio() -> None:
         pass
 
 
+def _load_env() -> None:
+    # Load environment variables from a local .env file if present.
+    # This lets you keep AWS keys and model ids out of code.
+    try:
+        load_dotenv()
+    except Exception:
+        # FastAPI should still start even if .env loading fails.
+        pass
+
+
+_load_env()
 _best_effort_utf8_stdio()
 
 
@@ -65,6 +77,11 @@ class AnalyzeResponse(BaseModel):
     analysis: str
 
 
+class BedrockTestResponse(BaseModel):
+    ok: bool
+    analysis: str
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True}
@@ -101,4 +118,33 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         raise HTTPException(status_code=502, detail=f"Bedrock analysis failed: {e}") from e
 
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
+
+
+@app.post("/bedrock-test", response_model=BedrockTestResponse)
+def bedrock_test(req: AnalyzeRequest) -> BedrockTestResponse:
+    """
+    Lightweight connectivity test against the configured Bedrock model.
+
+    Use a strong reasoning Claude model, for example:
+    - anthropic.claude-3-sonnet-20240229-v1:0
+
+    Either:
+    - set BEDROCK_MODEL_ID to that value, or
+    - pass model_id in the request body.
+    """
+    try:
+        analysis = analyze_with_bedrock(
+            devices=[],
+            query="Bedrock connectivity test",
+            instructions=req.instructions
+            or "Reply with a short sentence confirming that you are reachable.",
+            model_id=req.model_id,
+            region=req.region,
+            max_tokens=min(req.max_tokens, 128),
+            temperature=req.temperature,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Bedrock test failed: {e}") from e
+
+    return BedrockTestResponse(ok=True, analysis=analysis)
 

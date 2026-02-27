@@ -12,6 +12,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Create a `.env` file in the project root:
+
+```bash
+copy NUL .env
+```
+
+Example `.env` contents:
+
+```dotenv
+# AWS credentials (or use your normal AWS config/SSO)
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_REGION=us-east-1
+
+# Bedrock model configuration
+BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
+BEDROCK_REGION=us-east-1
+```
+
 ## Run
 
 ```bash

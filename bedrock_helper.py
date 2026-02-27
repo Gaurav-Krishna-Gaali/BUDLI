@@ -5,13 +5,6 @@ from typing import Any, Dict, Optional
 import boto3
 
 
-def _extract_converse_text(resp: Dict[str, Any]) -> str:
-    message = (resp.get("output") or {}).get("message") or {}
-    content = message.get("content") or []
-    texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("text")]
-    return "\n".join(texts).strip()
-
-
 def analyze_with_bedrock(
     *,
     devices: list[dict],
@@ -26,13 +19,20 @@ def analyze_with_bedrock(
     Runs a short analysis of the scraped devices using AWS Bedrock.
 
     Credentials/region are resolved by boto3 (env vars, config files, IAM role, etc.).
-    Prefer the Bedrock Converse API when available.
+    This implementation always uses invoke_model (no Converse API), as requested.
     """
+    # Treat Swagger's default "string" as unset.
+    if model_id == "string":
+        model_id = None
+
     model_id = model_id or os.getenv("BEDROCK_MODEL_ID") or os.getenv("AWS_BEDROCK_MODEL_ID")
     if not model_id:
         raise RuntimeError(
             "Missing Bedrock model id. Set BEDROCK_MODEL_ID (or pass model_id in request)."
         )
+
+    if region == "string":
+        region = None
 
     region = region or os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "us-east-1"
 
@@ -52,20 +52,7 @@ def analyze_with_bedrock(
 
     client = boto3.client("bedrock-runtime", region_name=region)
 
-    # Standardized API across Bedrock-supported chat models (preferred).
-    if hasattr(client, "converse"):
-        resp = client.converse(
-            modelId=model_id,
-            system=[{"text": system_prompt}],
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
-        )
-        text = _extract_converse_text(resp)
-        if text:
-            return text
-        return json.dumps(resp, ensure_ascii=False)
-
-    # Fallback for older botocore: use invoke_model with Anthropic-compatible payload.
+    # Use invoke_model with an Anthropic-compatible payload for Claude models.
     if model_id.startswith("anthropic."):
         body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -91,7 +78,8 @@ def analyze_with_bedrock(
         return json.dumps(data, ensure_ascii=False)
 
     raise RuntimeError(
-        "Your installed boto3/botocore doesn't support Bedrock Converse, and the configured "
-        "model_id isn't Anthropic. Upgrade boto3 or use an Anthropic model_id."
+        "This helper currently supports only Anthropic Claude models on Bedrock. "
+        "Set BEDROCK_MODEL_ID to an anthropic.* model id, e.g. "
+        "'anthropic.claude-3-sonnet-20240229-v1:0'."
     )
 
