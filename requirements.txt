@@ -1,0 +1,6 @@
+fastapi[standard]
+uvicorn[standard]
+requests
+beautifulsoup4
+lxml
+boto3
