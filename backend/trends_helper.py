@@ -2,7 +2,7 @@ import os
 from statistics import mean
 from typing import Any, Dict, List, Optional
 
-from serpapi import GoogleSearch
+from serpapi.google_search  import GoogleSearch
 
 
 def _get_env_api_key() -> Optional[str]:

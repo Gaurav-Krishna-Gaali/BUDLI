@@ -7,22 +7,6 @@ import type {
 } from "./types"
 
 // -------------------------------------------------------------------
-// Allowed brand → model catalogue (exactly the 25 permitted models)
-// -------------------------------------------------------------------
-
-export const ALLOWED_CATALOGUE: Record<string, string[]> = {
-  Apple: ["iPhone 13", "iPhone 12", "iPhone 11", "iPhone X", "iPhone 14", "iPhone 15"],
-  Samsung: ["S21", "A73 5G", "S24", "A52 5G", "M34 5G"],
-  Google: ["Pixel 6a", "Pixel 8"],
-  Vivo: ["V25", "V23", "Y75 5G"],
-  Oneplus: ["Nord CE 2 Lite", "9"],
-  Xiaomi: ["Redmi Note 12", "11T Pro 5G", "Redmi 9A"],
-  Oppo: ["Reno 8", "Reno 7", "F19 Pro"],
-  Poco: ["F4 5G"],
-}
-
-export const ALLOWED_BRANDS = Object.keys(ALLOWED_CATALOGUE)
-
 // -------------------------------------------------------------------
 // Market reference data
 //
@@ -110,247 +94,63 @@ const NETWORK_PREMIUM: Record<string, number> = {
 // Velocity estimation — driven by Flipkart & Amazon signals
 // -------------------------------------------------------------------
 
-function estimateVelocity(
-  demandScore: number,
-  flipkartListings: number,
-  amazonRank: number,
-  condition: string
-): { category: VelocityCategory; days: number } {
-  const conditionFactor =
-    condition === "Like New" ? 1.25
-    : condition === "Excellent" ? 1.05
-    : condition === "Good" ? 0.85
-    : 0.65
-
-  // Supply pressure: more Flipkart listings = more competition = slower
-  const supplyPressure = flipkartListings / 400  // normalise to ~1
-  // Amazon rank: lower bucket = higher demand
-  const amazonBoost = (10 - amazonRank) / 10
-
-  const score = (demandScore * conditionFactor * (1 + amazonBoost)) / (1 + supplyPressure)
-
-  if (score >= 7) return { category: "Fast",   days: 5  + Math.floor(Math.random() * 8)  }
-  if (score >= 4) return { category: "Medium", days: 18 + Math.floor(Math.random() * 14) }
-  return           { category: "Slow",   days: 42 + Math.floor(Math.random() * 28) }
-}
-
-// -------------------------------------------------------------------
-// Market reference lookup
-// -------------------------------------------------------------------
-
-function findMarketRef(device: DeviceInput): MarketRef | null {
-  return MARKET_REFS.find(
-    r =>
-      r.brand.toLowerCase() === device.brand.toLowerCase() &&
-      r.model.toLowerCase() === device.model.toLowerCase()
-  ) ?? null
-}
-
-// -------------------------------------------------------------------
-// Market signal cards shown in results
-// -------------------------------------------------------------------
-
-function buildMarketSignals(ref: MarketRef, device: DeviceInput): MarketSignal[] {
-  const now = new Date().toISOString()
-  const q = encodeURIComponent(`${device.brand} ${device.model} refurbished`)
-  return [
-    {
-      source: "Cashify (Sale Price)",
-      price: ref.cashifyAvg,
-      condition: "Certified Refurbished",
-      url: `https://www.cashify.in/buy-refurbished-${device.brand.toLowerCase()}-mobiles`,
-      scrapedAt: now,
-    },
-    {
-      source: "Ovantica (Sale Price)",
-      price: ref.ovanticaAvg,
-      condition: "Certified Refurbished",
-      url: `https://ovantica.com/`,
-      scrapedAt: now,
-    },
-    {
-      source: "Refit Global (Sale Price)",
-      price: ref.refitGlobalAvg,
-      condition: "Certified Refurbished",
-      url: `https://refitglobal.com/`,
-      scrapedAt: now,
-    },
-    {
-      source: "Flipkart (Listing Depth)",
-      price: ref.flipkartListings,
-      condition: `${ref.flipkartListings} active refurb listings`,
-      url: `https://www.flipkart.com/search?q=${q}&marketplace=REFURBISHED`,
-      scrapedAt: now,
-    },
-    {
-      source: "Amazon (Demand Rank)",
-      price: ref.demandScore,
-      condition: `Demand score ${ref.demandScore}/10`,
-      url: `https://www.amazon.in/s?k=${q}&rh=p_n_condition-type%3A2224371031`,
-      scrapedAt: now,
-    },
-  ]
-}
-
-// -------------------------------------------------------------------
-// Explanation generators
-// -------------------------------------------------------------------
-
-function generatePricingExplanation(
-  device: DeviceInput,
-  ref: MarketRef | null,
-  recommended: number,
-  low: number,
-  high: number,
-  conditionMult: number,
-  warrantyPremium: number,
-  networkPremium: number,
-  kbDelta?: number
-): string {
-  if (!ref) {
-    return `No market reference for ${device.brand} ${device.model}. Estimated ₹${recommended.toLocaleString("en-IN")} via brand-tier heuristics and condition adjustment (${device.conditionTier}). Confidence is low — manual review advised. Range: ₹${low.toLocaleString("en-IN")} – ₹${high.toLocaleString("en-IN")}.`
-  }
-  const blendedSalePrice = Math.round((ref.cashifyAvg + ref.ovanticaAvg + ref.refitGlobalAvg) / 3)
-  const parts: string[] = []
-  parts.push(
-    `Recommended price of ₹${recommended.toLocaleString("en-IN")} is anchored to the blended certified-refurbished sale price of ₹${blendedSalePrice.toLocaleString("en-IN")} across Cashify (₹${ref.cashifyAvg.toLocaleString("en-IN")}), Ovantica (₹${ref.ovanticaAvg.toLocaleString("en-IN")}), and Refit Global (₹${ref.refitGlobalAvg.toLocaleString("en-IN")}).`
-  )
-  parts.push(
-    `A condition multiplier of ${(conditionMult * 100).toFixed(0)}% was applied for the "${device.conditionTier}" grade.`
-  )
-  if (warrantyPremium > 0) {
-    parts.push(`A ${(warrantyPremium * 100).toFixed(1)}% warranty premium was added for the ${device.warrantyMonths}-month warranty.`)
-  }
-  if (networkPremium !== 0) {
-    parts.push(`A ${networkPremium > 0 ? "+" : ""}${(networkPremium * 100).toFixed(0)}% adjustment applied for ${device.networkType}.`)
-  }
-  if (kbDelta !== undefined && Math.abs(kbDelta) > 500) {
-    const dir = kbDelta > 0 ? "upward" : "downward"
-    parts.push(
-      `Historical reviewer feedback for similar ${device.brand} ${device.model} units suggests a ${dir} correction of ~₹${Math.abs(kbDelta).toLocaleString("en-IN")} — factored in at 40% weight.`
-    )
-  }
-  return parts.join(" ")
-}
-
-function generateVelocityExplanation(
-  device: DeviceInput,
-  ref: MarketRef | null,
-  velocity: VelocityCategory,
-  days: number
-): string {
-  if (!ref) {
-    return `Velocity estimate (${velocity}, ~${days} days) is heuristic — no model-specific data. High uncertainty.`
-  }
-  const parts: string[] = []
-  parts.push(`Expected sell-through: ${velocity} (~${days} days).`)
-  parts.push(
-    `Flipkart shows ${ref.flipkartListings} active refurbished listings for this model, indicating ${ref.flipkartListings > 300 ? "high" : ref.flipkartListings > 150 ? "moderate" : "lean"} supply competition.`
-  )
-  parts.push(
-    `Amazon demand score is ${ref.demandScore}/10 based on search volume and review velocity. ${ref.demandScore >= 7 ? "Strong demand supports faster sell-through." : ref.demandScore >= 5 ? "Moderate demand — standard listing window expected." : "Softer demand signals; competitive pricing recommended."}`
-  )
-  if (device.conditionTier === "Fair" || device.conditionTier === "Good") {
-    parts.push(`"${device.conditionTier}" condition units typically take 15–30% longer than "Like New" equivalents.`)
-  }
-  return parts.join(" ")
-}
-
-function generateRiskFlags(device: DeviceInput, ref: MarketRef | null, recommended: number, confidence: number): string[] {
-  const flags: string[] = []
-  if (!ref) flags.push("No direct market reference — confidence is LOW. Manual review strongly advised.")
-  if (confidence < 55) flags.push("Low confidence score: limited benchmark data for this configuration.")
-  if (device.conditionTier === "Fair") flags.push("Fair condition may require additional QA before listing.")
-  if (ref && ref.flipkartListings > 350) flags.push("Very high Flipkart supply: consider pricing at the lower end to accelerate sell-through.")
-  if (ref && ref.demandScore <= 4) flags.push("Low Amazon demand score — niche segment. Slower sell-through expected.")
-  if (device.warrantyMonths === 0) flags.push("No warranty: consider a short warranty to improve buyer conversion.")
-  if (device.networkType === "3G") flags.push("3G device: rapidly declining demand in India's 5G era — price aggressively.")
-  if (ref && recommended > ref.ovanticaAvg * 0.95) flags.push("Recommended price approaches Ovantica's listing price — ensure Budli margin is protected.")
-  return flags
-}
-
-// -------------------------------------------------------------------
-// Main engine function
-// -------------------------------------------------------------------
-
-export function processDevice(device: DeviceInput, kbPatterns: KBPattern[]): PricingResult {
-  const ref = findMarketRef(device)
-  const conditionMult = CONDITION_MULTIPLIERS[device.conditionTier] ?? 0.74
-  const warrantyPremium = WARRANTY_PREMIUM[device.warrantyMonths] ?? 0
-  const networkPremium = NETWORK_PREMIUM[device.networkType] ?? 0
-
-  const kbKey = `${device.brand}|${device.model}|${device.conditionTier}`
-  const kbPattern = kbPatterns.find(p => p.key === kbKey)
-  const kbDelta = kbPattern?.avgDelta
-
-  let recommended: number
-  let low: number
-  let high: number
-  let confidence: number
-
-  if (ref) {
-    // Blend the three sale-price sources equally
-    const blendedBase = (ref.cashifyAvg + ref.ovanticaAvg + ref.refitGlobalAvg) / 3
-    const withCondition = blendedBase * conditionMult
-    const withWarranty = withCondition * (1 + warrantyPremium)
-    const withNetwork = withWarranty * (1 + networkPremium)
-
-    // Optionally weight in customer sample price
-    const customerWeight = device.customerSamplePrice ? 0.25 : 0
-    const marketWeight = 1 - customerWeight
-    const blended = device.customerSamplePrice
-      ? withNetwork * marketWeight + device.customerSamplePrice * customerWeight
-      : withNetwork
-
-    // Apply KB learning at 40% weight
-    const kbAdjustment = kbDelta ? kbDelta * 0.4 : 0
-    recommended = Math.round((blended + kbAdjustment) / 100) * 100
-
-    confidence = 80
-    if (kbPattern && kbPattern.occurrences >= 3) confidence = Math.min(confidence + 8, 95)
-    if (device.customerSamplePrice) confidence = Math.min(confidence + 5, 95)
-
-    // Range bounded above by lowest of the three sale prices (can't exceed market sell price)
-    const lowestSalePrice = Math.min(ref.cashifyAvg, ref.ovanticaAvg, ref.refitGlobalAvg)
-    low  = Math.round((recommended * 0.92) / 100) * 100
-    high = Math.round(Math.min(recommended * 1.08, lowestSalePrice * 0.93) / 100) * 100
-    if (high < low) high = Math.round((low * 1.05) / 100) * 100
-  } else {
-    const brandTierBase: Record<string, number> = {
-      Apple: 30000, Samsung: 18000, Oneplus: 16000, Google: 22000,
-      Xiaomi: 10000, Vivo: 12000, Oppo: 11000, Poco: 13000,
+export async function processRun(devices: DeviceInput[], kbPatterns: KBPattern[]): Promise<PricingResult[]> {
+  try {
+    const payload = {
+      devices: devices.map(d => ({
+        id: d.id,
+        brand: d.brand,
+        model: d.model,
+        storage_gb: d.storage,
+        ram_gb: d.ram,
+        network_type: d.networkType,
+        condition_tier: d.conditionTier,
+        warranty_months: d.warrantyMonths.toString()
+      }))
     }
-    const base = brandTierBase[device.brand] ?? 10000
-    recommended = Math.round((base * conditionMult * (1 + warrantyPremium) * (1 + networkPremium)) / 100) * 100
-    confidence = 38
-    low  = Math.round((recommended * 0.88) / 100) * 100
-    high = Math.round((recommended * 1.12) / 100) * 100
+
+    const res = await fetch("http://localhost:8000/analyze-devices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+
+    if (!res.ok) {
+      throw new Error(`API error: ${res.statusText}`)
+    }
+
+    const data = await res.json()
+    const results: PricingResult[] = data.results.map((r: any) => {
+      const rec = parseInt(r.predicted_price || "0") || 0
+      const low = Math.round((rec * 0.92) / 100) * 100
+      const high = Math.round((rec * 1.08) / 100) * 100
+      
+      let velCat: VelocityCategory = "Medium"
+      if (r.velocity === "Very Good" || r.velocity === "Good" || r.velocity === "Fast") velCat = "Fast"
+      if (r.velocity === "Average" || r.velocity === "Slow") velCat = "Slow"
+      
+      const velDays = velCat === "Fast" ? 5 : velCat === "Medium" ? 18 : 42
+
+      return {
+        deviceId: r.id,
+        recommendedPrice: rec,
+        priceLow: low,
+        priceHigh: high,
+        confidenceScore: rec > 0 ? 80 : 0,
+        velocityCategory: velCat,
+        velocityDaysEstimate: velDays,
+        pricingExplanation: r.explanation || "No explanation provided.",
+        velocityExplanation: r.velocity || "No velocity data.",
+        riskFlags: r.risk_flags || [],
+        marketSignals: [],
+      }
+    })
+
+    return results
+
+  } catch (error) {
+    console.error("Failed to process run with backend API:", error)
+    // Fallback or re-throw
+    throw error
   }
-
-  const { category: velocityCategory, days: velocityDays } = estimateVelocity(
-    ref?.demandScore ?? 5,
-    ref?.flipkartListings ?? 200,
-    ref?.amazonRank ?? 5,
-    device.conditionTier
-  )
-
-  const marketSignals = ref ? buildMarketSignals(ref, device) : []
-
-  return {
-    deviceId: device.id,
-    recommendedPrice: recommended,
-    priceLow: low,
-    priceHigh: high,
-    confidenceScore: confidence,
-    velocityCategory,
-    velocityDaysEstimate: velocityDays,
-    pricingExplanation: generatePricingExplanation(device, ref, recommended, low, high, conditionMult, warrantyPremium, networkPremium, kbDelta),
-    velocityExplanation: generateVelocityExplanation(device, ref, velocityCategory, velocityDays),
-    riskFlags: generateRiskFlags(device, ref, recommended, confidence),
-    marketSignals,
-  }
-}
-
-export function processRun(devices: DeviceInput[], kbPatterns: KBPattern[]): PricingResult[] {
-  return devices.map(d => processDevice(d, kbPatterns))
 }

@@ -93,11 +93,11 @@ export function parseCSV(text: string): Record<string, string>[] {
 
 export function generateOutputCSV(run: Run): string {
   const headers = [
-    "Brand", "Model", "RAM", "Storage", "Network", "Condition", "Warranty (months)",
-    "Recommended Price (₹)", "Price Low (₹)", "Price High (₹)", "Confidence (%)",
-    "Velocity", "Est. Days to Sell",
-    "Pricing Explanation", "Velocity Explanation", "Risk Flags",
-    "Human Approved Price (₹)", "Human Velocity Override", "Feedback Note", "Accepted"
+    "brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months",
+    "recommended_price", "predicted_price", "price_high", "confidence",
+    "velocity", "velocity_days",
+    "explanation", "velocity_explanation", "risk_flags",
+    "human_approved_price", "human_velocity_override", "feedback_note", "accepted"
   ]
 
   const rows = run.devices.map(device => {
@@ -113,7 +113,7 @@ export function generateOutputCSV(run: Run): string {
       device.conditionTier,
       device.warrantyMonths.toString(),
       result.recommendedPrice.toString(),
-      result.priceLow.toString(),
+      result.priceLow.toString(), // predicted_price/low
       result.priceHigh.toString(),
       result.confidenceScore.toString(),
       result.velocityCategory,
@@ -133,11 +133,11 @@ export function generateOutputCSV(run: Run): string {
 }
 
 export function generateInputTemplateCSV(): string {
-  const headers = ["Brand", "Model", "RAM", "Storage", "Network", "Condition", "Warranty (months)", "Sample Price (₹)"]
+  const headers = ["brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months"]
   const examples = [
-    ["Apple", "iPhone 14", "6GB", "128GB", "5G", "Excellent", "6", ""],
-    ["Samsung", "Galaxy S23", "8GB", "256GB", "5G", "Good", "0", ""],
-    ["OnePlus", "11", "16GB", "256GB", "5G", "Like New", "12", ""],
+    ["Apple", "iPhone 16", "4", "128", "5G", "Good", "6"],
+    ["Apple", "iPhone 12", "4", "64", "5G", "Fair", "3"],
+    ["Samsung", "Galaxy S21", "8", "128", "5G", "Good", "6"],
   ]
   return [headers.join(","), ...examples.map(r => r.join(","))].join("\n")
 }

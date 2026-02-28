@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
 import { saveRun, parseCSV, generateInputTemplateCSV, getKBPatterns } from "@/lib/store"
-import { processRun, ALLOWED_CATALOGUE, ALLOWED_BRANDS } from "@/lib/pricing-engine"
+import { processRun } from "@/lib/pricing-engine"
 import type { DeviceInput, ConditionTier, NetworkType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -68,25 +68,27 @@ export default function NewRunPage() {
         if (rows.length === 0) { setCsvError("CSV appears to be empty."); return }
         if (rows.length > 10) { setCsvError("CSV must contain at most 10 devices."); return }
 
-        // Validate each row is an allowed brand/model
+        // Skipping the `ALLOWED_CATALOGUE` brand/model validation per user request
+        /*
         for (const row of rows) {
-          const b = row["Brand"]?.trim() ?? ""
-          const m = row["Model"]?.trim() ?? ""
+          const b = row["brand"]?.trim() ?? ""
+          const m = row["model"]?.trim() ?? ""
           const allowedModels = ALLOWED_CATALOGUE[b]
           if (!allowedModels) { setCsvError(`Unknown brand "${b}". Only allowed brands: ${ALLOWED_BRANDS.join(", ")}.`); return }
           if (!allowedModels.includes(m)) { setCsvError(`Model "${m}" is not in the allowed list for ${b}. Allowed: ${allowedModels.join(", ")}.`); return }
         }
+        */
 
         const mapped: DeviceInput[] = rows.map(row => ({
           id: crypto.randomUUID(),
-          brand: row["Brand"] ?? "",
-          model: row["Model"] ?? "",
-          ram: row["RAM"] ?? "",
-          storage: row["Storage"] ?? "",
-          networkType: (row["Network"] as NetworkType) || "4G",
-          conditionTier: (row["Condition"] as ConditionTier) || "Good",
-          warrantyMonths: parseInt(row["Warranty (months)"] ?? "0") || 0,
-          customerSamplePrice: row["Sample Price (₹)"] ? parseFloat(row["Sample Price (₹)"]) : undefined,
+          brand: row["brand"] ?? "",
+          model: row["model"] ?? "",
+          ram: row["ram_gb"] ?? "",
+          storage: row["storage_gb"] ?? "",
+          networkType: (row["network_type"] as NetworkType) || "4G",
+          conditionTier: (row["condition_tier"] as ConditionTier) || "Good",
+          warrantyMonths: parseInt(row["warranty_months"] ?? "0") || 0,
+          customerSamplePrice: undefined, // no longer in CSV template
         }))
         setDevices(mapped)
         setCsvSuccess(true)
@@ -123,22 +125,26 @@ export default function NewRunPage() {
     if (err) { setCsvError(err); return }
 
     setProcessing(true)
-    await new Promise(r => setTimeout(r, 1800)) // simulate async processing
 
-    const kbPatterns = getKBPatterns()
-    const results = processRun(devices, kbPatterns)
-    const run = {
-      id: crypto.randomUUID(),
-      name: runName || `Run ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-      status: "completed" as const,
-      createdAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      devices,
-      results,
-      feedbackSubmitted: false,
+    try {
+      const kbPatterns = getKBPatterns()
+      const results = await processRun(devices, kbPatterns)
+      const run = {
+        id: crypto.randomUUID(),
+        name: runName || `Run ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+        status: "completed" as const,
+        createdAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        devices,
+        results,
+        feedbackSubmitted: false,
+      }
+      saveRun(run)
+      router.push(`/runs/${run.id}`)
+    } catch (apiError: any) {
+      setCsvError(apiError.message || "An error occurred while generating recommendations.")
+      setProcessing(false)
     }
-    saveRun(run)
-    router.push(`/runs/${run.id}`)
   }
 
   const isValid = devices.every(d => d.brand && d.model && d.ram && d.storage)
@@ -243,55 +249,35 @@ export default function NewRunPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <Label className="text-xs mb-1 block">Brand *</Label>
-                  <Select
+                  <Input
+                    placeholder="e.g. Apple"
                     value={device.brand}
-                    onValueChange={v => {
-                      // reset model when brand changes
-                      setDevices(prev => prev.map(d =>
-                        d.id === device.id ? { ...d, brand: v, model: "" } : d
-                      ))
-                    }}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue placeholder="Select brand" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ALLOWED_BRANDS.map(b => (
-                        <SelectItem key={b} value={b} className="text-xs">{b}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={e => updateDevice(device.id, "brand", e.target.value)}
+                    className="h-8 text-xs"
+                  />
                 </div>
                 <div>
                   <Label className="text-xs mb-1 block">Model *</Label>
-                  <Select
+                  <Input
+                    placeholder="e.g. iPhone 16"
                     value={device.model}
-                    onValueChange={v => updateDevice(device.id, "model", v)}
-                    disabled={!device.brand}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue placeholder={device.brand ? "Select model" : "Select brand first"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(ALLOWED_CATALOGUE[device.brand] ?? []).map(m => (
-                        <SelectItem key={m} value={m} className="text-xs">{m}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={e => updateDevice(device.id, "model", e.target.value)}
+                    className="h-8 text-xs"
+                  />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">RAM *</Label>
+                  <Label className="text-xs mb-1 block">RAM (GB) *</Label>
                   <Input
-                    placeholder="e.g. 6GB"
+                    placeholder="e.g. 6"
                     value={device.ram}
                     onChange={e => updateDevice(device.id, "ram", e.target.value)}
                     className="h-8 text-xs"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">Storage *</Label>
+                  <Label className="text-xs mb-1 block">Storage (GB) *</Label>
                   <Input
-                    placeholder="e.g. 128GB"
+                    placeholder="e.g. 128"
                     value={device.storage}
                     onChange={e => updateDevice(device.id, "storage", e.target.value)}
                     className="h-8 text-xs"
@@ -320,7 +306,7 @@ export default function NewRunPage() {
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">Warranty</Label>
+                  <Label className="text-xs mb-1 block">Warranty (Months)</Label>
                   <Select value={String(device.warrantyMonths)} onValueChange={v => updateDevice(device.id, "warrantyMonths", parseInt(v))}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
@@ -330,7 +316,7 @@ export default function NewRunPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
+                {/* <div>
                   <Label className="text-xs mb-1 block">Sample Price (₹)</Label>
                   <Input
                     type="number"
@@ -339,7 +325,7 @@ export default function NewRunPage() {
                     onChange={e => updateDevice(device.id, "customerSamplePrice", parseFloat(e.target.value) || 0)}
                     className="h-8 text-xs"
                   />
-                </div>
+                </div> */}
               </div>
             </div>
           ))}
