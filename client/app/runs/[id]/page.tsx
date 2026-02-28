@@ -28,11 +28,14 @@ export default function RunResultsPage() {
   const [localResults, setLocalResults] = useState<PricingResult[]>([])
 
   useEffect(() => {
-    const r = getRun(id)
-    if (r) {
-      setRun(r)
-      setLocalResults(r.results.map(res => ({ ...res })))
+    async function loadRun() {
+      const r = await getRun(id)
+      if (r) {
+        setRun(r)
+        setLocalResults(r.results.map(res => ({ ...res })))
+      }
     }
+    loadRun()
   }, [id])
 
   if (!run) {
@@ -62,7 +65,7 @@ export default function RunResultsPage() {
     URL.revokeObjectURL(url)
   }
 
-  const submitFeedback = () => {
+  const submitFeedback = async () => {
     // Save KB entries for reviewed devices
     const entries: KnowledgeBaseEntry[] = []
     localResults.forEach(result => {
@@ -88,10 +91,10 @@ export default function RunResultsPage() {
         })
       }
     })
-    addKBEntries(entries)
+    await addKBEntries(entries)
 
     const updated: Run = { ...run, results: localResults, feedbackSubmitted: true }
-    saveRun(updated)
+    await saveRun(updated)
     setRun(updated)
     setFeedbackSaved(true)
     setFeedbackMode(false)

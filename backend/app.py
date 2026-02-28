@@ -1,14 +1,19 @@
 from typing import Any, Optional
 
 import csv
+import os
 import io
 import json
 import logging
 import urllib.parse
+from datetime import datetime
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from database import engine, Base, get_db
+from models import RunModel, KnowledgeBaseEntryModel
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -51,6 +56,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize database tables
+Base.metadata.create_all(bind=engine)
 
 logger = logging.getLogger("budli-api")
 if not logger.handlers:
@@ -448,4 +456,143 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
         ))
         
     return AnalyzeDevicesResponse(results=results)
+
+# --- Database Endpoints ---
+
+class RunCreate(BaseModel):
+    id: str
+    name: str
+    status: str
+    createdAt: str = Field(alias="createdAt")
+    completedAt: Optional[str] = Field(None, alias="completedAt")
+    devices: list[dict]
+    results: list[dict]
+    feedbackSubmitted: bool = Field(alias="feedbackSubmitted")
+
+@app.get("/runs")
+def get_runs(db: Session = Depends(get_db)):
+    runs = db.query(RunModel).order_by(RunModel.created_at.desc()).all()
+    # convert SQLAlchemy objects to dicts
+    return [{
+        "id": r.id,
+        "name": r.name,
+        "status": r.status,
+        "createdAt": r.created_at.isoformat() if r.created_at else None,
+        "completedAt": r.completed_at.isoformat() if r.completed_at else None,
+        "devices": r.devices,
+        "results": r.results,
+        "feedbackSubmitted": r.feedback_submitted
+    } for r in runs]
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: str, db: Session = Depends(get_db)):
+    run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {
+        "id": run.id,
+        "name": run.name,
+        "status": run.status,
+        "createdAt": run.created_at.isoformat() if run.created_at else None,
+        "completedAt": run.completed_at.isoformat() if run.completed_at else None,
+        "devices": run.devices,
+        "results": run.results,
+        "feedbackSubmitted": run.feedback_submitted
+    }
+
+@app.post("/runs")
+def create_run(run: RunCreate, db: Session = Depends(get_db)):
+    existing = db.query(RunModel).filter(RunModel.id == run.id).first()
+    if existing:
+        existing.name = run.name
+        existing.status = run.status
+        if run.completedAt:
+            existing.completed_at = datetime.fromisoformat(run.completedAt.replace('Z', '+00:00'))
+        existing.devices = run.devices
+        existing.results = run.results
+        existing.feedback_submitted = run.feedbackSubmitted
+    else:
+        new_run = RunModel(
+            id=run.id,
+            name=run.name,
+            status=run.status,
+            created_at=datetime.fromisoformat(run.createdAt.replace('Z', '+00:00')) if run.createdAt else None,
+            completed_at=datetime.fromisoformat(run.completedAt.replace('Z', '+00:00')) if run.completedAt else None,
+            devices=run.devices,
+            results=run.results,
+            feedback_submitted=run.feedbackSubmitted
+        )
+        db.add(new_run)
+    db.commit()
+    return {"status": "ok"}
+
+@app.delete("/runs/{run_id}")
+def delete_run(run_id: str, db: Session = Depends(get_db)):
+    run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if run:
+        db.delete(run)
+        db.commit()
+    return {"status": "ok"}
+
+
+class KBEntryCreate(BaseModel):
+    id: str
+    brand: str
+    model: str
+    ram: str
+    storage: str
+    conditionTier: str = Field(alias="conditionTier")
+    recommendedPrice: int = Field(alias="recommendedPrice")
+    humanApprovedPrice: int = Field(alias="humanApprovedPrice")
+    delta: int
+    velocityCategory: str = Field(alias="velocityCategory")
+    humanVelocityOverride: Optional[str] = Field(None, alias="humanVelocityOverride")
+    feedbackNote: Optional[str] = Field(None, alias="feedbackNote")
+    runId: str = Field(alias="runId")
+    createdAt: str = Field(alias="createdAt")
+
+@app.get("/kb")
+def get_kb_entries(db: Session = Depends(get_db)):
+    entries = db.query(KnowledgeBaseEntryModel).order_by(KnowledgeBaseEntryModel.created_at.desc()).all()
+    return [{
+        "id": e.id,
+        "brand": e.brand,
+        "model": e.model,
+        "ram": e.ram,
+        "storage": e.storage,
+        "conditionTier": e.condition_tier,
+        "recommendedPrice": e.recommended_price,
+        "humanApprovedPrice": e.human_approved_price,
+        "delta": e.delta,
+        "velocityCategory": e.velocity_category,
+        "humanVelocityOverride": e.human_velocity_override,
+        "feedbackNote": e.feedback_note,
+        "runId": e.run_id,
+        "createdAt": e.created_at.isoformat() if e.created_at else None
+    } for e in entries]
+
+@app.post("/kb")
+def create_kb_entries(entries: list[KBEntryCreate], db: Session = Depends(get_db)):
+    for e in entries:
+        existing = db.query(KnowledgeBaseEntryModel).filter(KnowledgeBaseEntryModel.id == e.id).first()
+        if not existing:
+            new_entry = KnowledgeBaseEntryModel(
+                id=e.id,
+                brand=e.brand,
+                model=e.model,
+                ram=e.ram,
+                storage=e.storage,
+                condition_tier=e.conditionTier,
+                recommended_price=e.recommendedPrice,
+                human_approved_price=e.humanApprovedPrice,
+                delta=e.delta,
+                velocity_category=e.velocityCategory,
+                human_velocity_override=e.humanVelocityOverride,
+                feedback_note=e.feedbackNote,
+                run_id=e.runId,
+                created_at=datetime.fromisoformat(e.createdAt.replace('Z', '+00:00')) if e.createdAt else None
+            )
+            db.add(new_entry)
+    db.commit()
+    return {"status": "ok", "added": len(entries)}
 

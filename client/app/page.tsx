@@ -27,9 +27,9 @@ export default function DashboardPage() {
   const [patternCount, setPatternCount] = useState(0)
 
   useEffect(() => {
-    setRuns(getRuns())
-    setKbCount(getKBEntries().length)
-    setPatternCount(getKBPatterns().length)
+    getRuns().then(setRuns)
+    getKBEntries().then(entries => setKbCount(entries.length))
+    getKBPatterns().then(patterns => setPatternCount(patterns.length))
   }, [])
 
   const allResults = runs.flatMap(r => r.results)

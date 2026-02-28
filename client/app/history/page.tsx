@@ -13,12 +13,12 @@ export default function HistoryPage() {
   const [runs, setRuns] = useState<Run[]>([])
 
   useEffect(() => {
-    setRuns(getRuns())
+    getRuns().then(setRuns)
   }, [])
 
-  const handleDelete = (id: string) => {
-    deleteRun(id)
-    setRuns(getRuns())
+  const handleDelete = async (id: string) => {
+    await deleteRun(id)
+    setRuns(await getRuns())
   }
 
   const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`

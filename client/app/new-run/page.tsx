@@ -127,7 +127,7 @@ export default function NewRunPage() {
     setProcessing(true)
 
     try {
-      const kbPatterns = getKBPatterns()
+      const kbPatterns = await getKBPatterns()
       const results = await processRun(devices, kbPatterns)
       const run = {
         id: crypto.randomUUID(),
@@ -139,7 +139,8 @@ export default function NewRunPage() {
         results,
         feedbackSubmitted: false,
       }
-      saveRun(run)
+      
+      await saveRun(run)
       router.push(`/runs/${run.id}`)
     } catch (apiError: any) {
       setCsvError(apiError.message || "An error occurred while generating recommendations.")

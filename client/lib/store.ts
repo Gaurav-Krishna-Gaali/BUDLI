@@ -2,56 +2,82 @@
 
 import type { Run, KnowledgeBaseEntry, KBPattern } from "./types"
 
-const RUNS_KEY = "budli_runs"
-const KB_KEY = "budli_kb"
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 // ------- Runs -------
 
-export function getRuns(): Run[] {
-  if (typeof window === "undefined") return []
+export async function getRuns(): Promise<Run[]> {
   try {
-    return JSON.parse(localStorage.getItem(RUNS_KEY) ?? "[]")
-  } catch {
+    const res = await fetch(`${API_BASE_URL}/runs`)
+    if (!res.ok) return []
+    return await res.json()
+  } catch (err) {
+    console.error("Failed to get runs", err)
     return []
   }
 }
 
-export function getRun(id: string): Run | null {
-  return getRuns().find(r => r.id === id) ?? null
+export async function getRun(id: string): Promise<Run | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/runs/${id}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch (err) {
+    console.error("Failed to get run", err)
+    return null
+  }
 }
 
-export function saveRun(run: Run): void {
-  if (typeof window === "undefined") return
-  const runs = getRuns().filter(r => r.id !== run.id)
-  runs.unshift(run)
-  localStorage.setItem(RUNS_KEY, JSON.stringify(runs))
+export async function saveRun(run: Run): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(run)
+    })
+  } catch (err) {
+    console.error("Failed to save run", err)
+  }
 }
 
-export function deleteRun(id: string): void {
-  if (typeof window === "undefined") return
-  const runs = getRuns().filter(r => r.id !== id)
-  localStorage.setItem(RUNS_KEY, JSON.stringify(runs))
+export async function deleteRun(id: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/runs/${id}`, {
+      method: "DELETE"
+    })
+  } catch (err) {
+    console.error("Failed to delete run", err)
+  }
 }
 
 // ------- Knowledge Base -------
 
-export function getKBEntries(): KnowledgeBaseEntry[] {
-  if (typeof window === "undefined") return []
+export async function getKBEntries(): Promise<KnowledgeBaseEntry[]> {
   try {
-    return JSON.parse(localStorage.getItem(KB_KEY) ?? "[]")
-  } catch {
+    const res = await fetch(`${API_BASE_URL}/kb`)
+    if (!res.ok) return []
+    return await res.json()
+  } catch (err) {
+    console.error("Failed to get KB entries", err)
     return []
   }
 }
 
-export function addKBEntries(entries: KnowledgeBaseEntry[]): void {
-  if (typeof window === "undefined") return
-  const existing = getKBEntries()
-  localStorage.setItem(KB_KEY, JSON.stringify([...entries, ...existing]))
+export async function addKBEntries(entries: KnowledgeBaseEntry[]): Promise<void> {
+  if (!entries || entries.length === 0) return
+  try {
+    await fetch(`${API_BASE_URL}/kb`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entries)
+    })
+  } catch (err) {
+    console.error("Failed to save KB entries", err)
+  }
 }
 
-export function getKBPatterns(): KBPattern[] {
-  const entries = getKBEntries()
+export async function getKBPatterns(): Promise<KBPattern[]> {
+  const entries = await getKBEntries()
   const map = new Map<string, { deltas: number[]; count: number }>()
 
   entries.forEach(e => {
