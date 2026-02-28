@@ -275,6 +275,17 @@ export default function RunResultsPage() {
                       </div>
                     )}
 
+                    {/* Source URL direct link */}
+                    {result.sourceUrl && (
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Ovantica Search Source</p>
+                        <a href={result.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 transition-colors px-3 py-2 rounded-md font-medium">
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          View search results used for analysis
+                        </a>
+                      </div>
+                    )}
+
                     {/* Human review */}
                     {feedbackMode && (
                       <div className="border-t border-border pt-4">

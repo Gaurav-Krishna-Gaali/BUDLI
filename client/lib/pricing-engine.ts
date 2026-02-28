@@ -142,7 +142,14 @@ export async function processRun(devices: DeviceInput[], kbPatterns: KBPattern[]
         pricingExplanation: r.explanation || "No explanation provided.",
         velocityExplanation: r.velocity || "No velocity data.",
         riskFlags: r.risk_flags || [],
-        marketSignals: [],
+        marketSignals: r.source_url ? [{
+          source: "Ovantica (Search)",
+          price: rec,
+          condition: "Scraped Search Query",
+          url: r.source_url,
+          scrapedAt: new Date().toISOString()
+        }] : [],
+        sourceUrl: r.source_url,
       }
     })
 

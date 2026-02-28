@@ -97,7 +97,7 @@ export function generateOutputCSV(run: Run): string {
     "recommended_price", "predicted_price", "price_high", "confidence",
     "velocity", "velocity_days",
     "explanation", "velocity_explanation", "risk_flags",
-    "human_approved_price", "human_velocity_override", "feedback_note", "accepted"
+    "human_approved_price", "human_velocity_override", "feedback_note", "accepted", "source_url"
   ]
 
   const rows = run.devices.map(device => {
@@ -125,6 +125,7 @@ export function generateOutputCSV(run: Run): string {
       result.humanVelocityOverride ?? "",
       result.humanFeedbackNote ?? "",
       result.isAccepted !== undefined ? (result.isAccepted ? "Yes" : "No") : "",
+      result.sourceUrl ?? ""
     ]
     return row.join(",")
   })

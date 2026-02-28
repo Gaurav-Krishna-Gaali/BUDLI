@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import urllib.parse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -160,6 +161,7 @@ class AnalyzeDevicesResponseItem(BaseModel):
     velocity: str
     explanation: str
     risk_flags: list[str]
+    source_url: str
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem]
@@ -206,7 +208,7 @@ def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -220,6 +222,8 @@ def _run_bedrock_analysis(
 
     # Simple search query for Ovantica and Google Trends.
     search_query = " ".join(x for x in [brand, model, f"{storage_gb}GB"] if x)
+    search_url = f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(search_query)}"
+    
     logger.info(
         "Row %d: querying '%s' (brand=%s, model=%s, storage=%sGB)",
         idx,
@@ -259,7 +263,7 @@ def _run_bedrock_analysis(
     except Exception as e:
         logger.exception("Row %d: scrape failed: %s", idx, e)
         # On scrape failure, leave model-driven fields empty but keep the row.
-        return "", "", "", []
+        return "", "", "", [], search_url
 
     # Build a structured pricing prompt and ask for JSON.
     instructions = (
@@ -338,10 +342,10 @@ def _run_bedrock_analysis(
             predicted_price = ""
             velocity = ""
 
-        return predicted_price, velocity, explanation, risk_flags
+        return predicted_price, velocity, explanation, risk_flags, search_url
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
-        return "", "", "", []
+        return "", "", "", [], search_url
 
 
 @app.post(
@@ -381,6 +385,8 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         fieldnames.append("predicted_price")
     if "velocity" not in fieldnames:
         fieldnames.append("velocity")
+    if "source_url" not in fieldnames:
+        fieldnames.append("source_url")
 
     output_buf = io.StringIO()
     writer = csv.DictWriter(output_buf, fieldnames=fieldnames)
@@ -395,7 +401,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags = _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, source_url = _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -408,6 +414,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 
         row["predicted_price"] = predicted_price
         row["velocity"] = velocity
+        row["source_url"] = source_url
         writer.writerow(row)
 
     output_buf.seek(0)
@@ -421,7 +428,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags = _run_bedrock_analysis(
+        price, vel, explanation, flags, source_url = _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -436,7 +443,8 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             predicted_price=price or "",
             velocity=vel or "",
             explanation=explanation or "",
-            risk_flags=flags or []
+            risk_flags=flags or [],
+            source_url=source_url or ""
         ))
         
     return AnalyzeDevicesResponse(results=results)

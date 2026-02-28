@@ -35,6 +35,7 @@ export interface PricingResult {
   velocityExplanation: string
   riskFlags: string[]
   marketSignals: MarketSignal[]
+  sourceUrl?: string
   // Human review fields
   humanApprovedPrice?: number
   humanVelocityOverride?: VelocityCategory
