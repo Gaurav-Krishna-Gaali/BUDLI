@@ -20,8 +20,8 @@ export default function AnalyticsPage() {
   const [entries, setEntries] = useState<KnowledgeBaseEntry[]>([])
 
   useEffect(() => {
-    setRuns(getRuns())
-    setEntries(getKBEntries())
+    getRuns().then(setRuns)
+    getKBEntries().then(setEntries)
   }, [])
 
   const allResults = runs.flatMap(r => r.results)

@@ -13,8 +13,8 @@ export default function KnowledgeBasePage() {
   const [patterns, setPatterns] = useState<KBPattern[]>([])
 
   useEffect(() => {
-    setEntries(getKBEntries())
-    setPatterns(getKBPatterns())
+    getKBEntries().then(setEntries)
+    getKBPatterns().then(setPatterns)
   }, [])
 
   const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`
