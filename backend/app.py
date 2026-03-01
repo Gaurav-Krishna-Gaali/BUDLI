@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
-from script import scrape_device_data
+from script import scrape_device_data, scrape_refit_data
 from trends_helper import fetch_trend_metrics
 
 
@@ -163,13 +163,19 @@ class AnalyzeDevicesRequestItem(BaseModel):
     condition_tier: str
     warranty_months: str
 
+class SourceUrl(BaseModel):
+    source: str  # "ovantica" | "refitglobal"
+    url: str
+
+
 class AnalyzeDevicesResponseItem(BaseModel):
     id: str
     predicted_price: str
     velocity: str
     explanation: str
     risk_flags: list[str]
-    source_url: str
+    source_url: str  # backward compat: primary URL
+    source_urls: list[SourceUrl] = []  # all scraped source URLs
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem]
@@ -207,6 +213,42 @@ def bedrock_test(req: AnalyzeRequest) -> BedrockTestResponse:
     return BedrockTestResponse(ok=True, analysis=analysis)
 
 
+def _scrape_all_sources(search_query: str) -> tuple[list[dict], list[dict]]:
+    """
+    Scrape Ovantica and ReFit Global. Returns (devices, source_urls).
+    Each device has name, price, link, source ("ovantica" | "refitglobal").
+    source_urls is a list of {"source": str, "url": str}.
+    """
+    devices: list[dict] = []
+    source_urls: list[dict] = []
+
+    try:
+        ovantica = scrape_device_data(search_query)
+        for d in ovantica:
+            d["source"] = "ovantica"
+            devices.append(d)
+        source_urls.append({
+            "source": "ovantica",
+            "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(search_query)}",
+        })
+    except Exception as e:
+        logger.warning("Ovantica scrape failed: %s", e)
+
+    try:
+        refit = scrape_refit_data(search_query)
+        for d in refit:
+            d["source"] = "refitglobal"
+            devices.append(d)
+        source_urls.append({
+            "source": "refitglobal",
+            "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}",
+        })
+    except Exception as e:
+        logger.warning("ReFit scrape failed: %s", e)
+
+    return devices, source_urls
+
+
 def _run_bedrock_analysis(
     idx: int,
     brand: str,
@@ -216,7 +258,7 @@ def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str]:
+) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str, list[dict]]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -228,9 +270,7 @@ def _run_bedrock_analysis(
         f"Warranty: {warranty_months} months\n"
     )
 
-    # Simple search query for Ovantica and Google Trends.
     search_query = " ".join(x for x in [brand, model, f"{storage_gb}GB"] if x)
-    search_url = f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(search_query)}"
     
     logger.info(
         "Row %d: querying '%s' (brand=%s, model=%s, storage=%sGB)",
@@ -242,9 +282,12 @@ def _run_bedrock_analysis(
     )
 
     try:
-        scraped_devices = scrape_device_data(search_query)
+        scraped_devices, source_urls = _scrape_all_sources(search_query)
+        ovantica_count = sum(1 for d in scraped_devices if d.get("source") == "ovantica")
+        refit_count = sum(1 for d in scraped_devices if d.get("source") == "refitglobal")
         logger.info(
-            "Row %d: scraped %d devices from Ovantica", idx, len(scraped_devices)
+            "Row %d: scraped %d from Ovantica, %d from ReFit",
+            idx, ovantica_count, refit_count,
         )
 
         # Fetch Google Trends metrics (best-effort, optional).
@@ -270,15 +313,19 @@ def _run_bedrock_analysis(
             logger.info("Row %d: no Google Trends data", idx)
     except Exception as e:
         logger.exception("Row %d: scrape failed: %s", idx, e)
-        # On scrape failure, leave model-driven fields empty but keep the row.
-        return "", "", "", [], search_url
+        fallback_urls = [
+            {"source": "ovantica", "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(search_query)}"},
+            {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}"},
+        ]
+        return "", "", "", [], fallback_urls[0]["url"], fallback_urls
 
     # Build a structured pricing prompt and ask for JSON.
     instructions = (
         "You are Budli's Pricing Intelligence AI.\n\n"
         "You receive:\n"
         "- Device attributes (brand, model, storage, condition, warranty, RAM, network type)\n"
-        "- External market signals from scraped listings (price and title list in JSON).\n"
+        "- External market signals from scraped listings (price, title, link, source) in JSON. "
+        "Sources include 'ovantica' and 'refitglobal' (ReFit Global). Use both when available.\n"
         "- Search demand signals from Google Trends (normalized 0-100 indices over the last 12 months).\n\n"
         "For the given device and signals, decide a competitive selling strategy.\n\n"
         "Return ONLY a JSON object with the following fields:\n\n"
@@ -307,6 +354,7 @@ def _run_bedrock_analysis(
                     "name": d.get("name"),
                     "price": d.get("price"),
                     "link": d.get("link"),
+                    "source": d.get("source", "unknown"),
                 }
                 for d in scraped_devices
             ],
@@ -322,7 +370,16 @@ def _run_bedrock_analysis(
         explanation: Optional[str] = ""
         risk_flags: list[str] = []
         try:
-            parsed = json.loads(analysis_text)
+            # Strip markdown code fences if present (e.g. ```json ... ```)
+            text = analysis_text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+            parsed = json.loads(text)
             value = parsed.get("recommended_price")
             vel_value = parsed.get("velocity")
             explanation = parsed.get("explanation", "")
@@ -350,10 +407,12 @@ def _run_bedrock_analysis(
             predicted_price = ""
             velocity = ""
 
-        return predicted_price, velocity, explanation, risk_flags, search_url
+        primary_url = source_urls[0]["url"] if source_urls else ""
+        return predicted_price, velocity, explanation, risk_flags, primary_url, source_urls
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
-        return "", "", "", [], search_url
+        primary_url = source_urls[0]["url"] if source_urls else ""
+        return "", "", "", [], primary_url, source_urls
 
 
 @app.post(
@@ -395,6 +454,8 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         fieldnames.append("velocity")
     if "source_url" not in fieldnames:
         fieldnames.append("source_url")
+    if "source_urls" not in fieldnames:
+        fieldnames.append("source_urls")
 
     output_buf = io.StringIO()
     writer = csv.DictWriter(output_buf, fieldnames=fieldnames)
@@ -409,7 +470,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, source_url = _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, source_url, source_urls = _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -423,6 +484,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         row["predicted_price"] = predicted_price
         row["velocity"] = velocity
         row["source_url"] = source_url
+        row["source_urls"] = json.dumps(source_urls) if source_urls else "[]"
         writer.writerow(row)
 
     output_buf.seek(0)
@@ -436,7 +498,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, source_url = _run_bedrock_analysis(
+        price, vel, explanation, flags, source_url, source_urls = _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -452,7 +514,8 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             velocity=vel or "",
             explanation=explanation or "",
             risk_flags=flags or [],
-            source_url=source_url or ""
+            source_url=source_url or "",
+            source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
         ))
         
     return AnalyzeDevicesResponse(results=results)

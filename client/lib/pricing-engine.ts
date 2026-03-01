@@ -366,6 +366,27 @@ export async function processRun(
 
       const velDays = velCat === "Fast" ? 5 : velCat === "Medium" ? 18 : 42;
 
+      const marketSignals: MarketSignal[] =
+        r.source_urls && Array.isArray(r.source_urls) && r.source_urls.length > 0
+          ? r.source_urls.map((s: { source: string; url: string }) => ({
+              source: s.source === "refitglobal" ? "ReFit Global (Search)" : "Ovantica (Search)",
+              price: rec,
+              condition: "Scraped Search Query",
+              url: s.url,
+              scrapedAt: new Date().toISOString(),
+            }))
+          : r.source_url
+            ? [
+                {
+                  source: "Ovantica (Search)",
+                  price: rec,
+                  condition: "Scraped Search Query",
+                  url: r.source_url,
+                  scrapedAt: new Date().toISOString(),
+                },
+              ]
+            : [];
+
       return {
         deviceId: r.id,
         recommendedPrice: rec,
@@ -377,17 +398,7 @@ export async function processRun(
         pricingExplanation: r.explanation || "No explanation provided.",
         velocityExplanation: r.velocity || "No velocity data.",
         riskFlags: r.risk_flags || [],
-        marketSignals: r.source_url
-          ? [
-              {
-                source: "Ovantica (Search)",
-                price: rec,
-                condition: "Scraped Search Query",
-                url: r.source_url,
-                scrapedAt: new Date().toISOString(),
-              },
-            ]
-          : [],
+        marketSignals,
         sourceUrl: r.source_url,
       };
     });
