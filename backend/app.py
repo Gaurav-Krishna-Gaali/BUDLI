@@ -72,6 +72,14 @@ class Device(BaseModel):
     name: Optional[str] = None
     price: Optional[str] = None
     link: Optional[str] = None
+    source: Optional[str] = None
+    # Cashify-specific (also available for other sources if scrapers add them)
+    original_price: Optional[str] = None
+    effective_price: Optional[str] = None
+    discount_pct: Optional[str] = None
+    rating: Optional[str] = None
+    storage: Optional[str] = None
+    image: Optional[str] = None
 
 
 class ScrapeResponse(BaseModel):
@@ -164,7 +172,7 @@ class AnalyzeDevicesRequestItem(BaseModel):
     warranty_months: str
 
 class SourceUrl(BaseModel):
-    source: str  # "ovantica" | "refitglobal"
+    source: str  # "ovantica" | "refitglobal" | "cashify"
     url: str
 
 

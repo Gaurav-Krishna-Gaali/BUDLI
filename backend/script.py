@@ -1,3 +1,4 @@
+import json
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -134,58 +135,115 @@ def scrape_refit_data(query: str):
     return products
 
 
-def scrape_cashify_data(query: str):
+def scrape_cashify_data(query: str, page_size: int = 20):
     """
-    Scrape product data from Cashify search results.
+    Fetch product data from Cashify's internal search API.
 
-    Returns a list of dicts: {"name", "price", "link"}.
+    Cashify is a Next.js/React app that calls its own REST API.
+    We replicate those API calls directly — no browser / Playwright needed,
+    making this server-friendly and lightweight.
+
+    Strategy
+    --------
+    1. GET the search page to obtain a valid session cookie.
+    2. Parse the JWT access_token from the ``_cs___oa__t___v1`` cookie.
+    3. POST to the internal search endpoint with the Bearer token.
+
+    Returns a list of dicts:
+        {"name", "price", "original_price", "effective_price",
+         "discount_pct", "rating", "storage", "image", "link"}
     """
-    search_url = "https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search"
-    response = requests.get(
-        search_url,
-        params={"q": query},
-        headers=HEADERS,
-        timeout=30,
-    )
-    response.raise_for_status()
-
-    try:
-        soup = BeautifulSoup(response.text, "lxml")
-    except Exception:
-        soup = BeautifulSoup(response.text, "html.parser")
-
     base_url = "https://www.cashify.in"
+    search_page_url = f"{base_url}/buy-refurbished-gadgets/all-gadgets/search"
+    api_url = f"{base_url}/api/omni01/product/catalogue/list/search/results"
+
+    # Static device-id used by the web client (captured from browser network tab).
+    DEVICE_ID = "cashify-QFKYSD-ZC00MJVHLTLHMJMTZJAZMJLKMGY3MTY1"
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    # Step 1: GET search page to populate session cookies (including auth token).
+    session.get(search_page_url, params={"q": query}, timeout=30)
+
+    # Step 2: Extract access token from the auth cookie.
+    access_token: str | None = None
+    raw_cookie = session.cookies.get("_cs___oa__t___v1")
+    if raw_cookie:
+        try:
+            token_data = json.loads(raw_cookie)
+            access_token = token_data.get("access_token")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    # Step 3: POST to the internal search API.
+    api_headers = {
+        **HEADERS,
+        "Content-Type": "application/json",
+        "x-app-device-id": DEVICE_ID,
+    }
+    if access_token:
+        api_headers["x-authorization"] = f"Bearer {access_token}"
+
+    payload = {
+        "qry": query,
+        "ps": page_size,   # page size (number of results)
+        "os": 1,            # offset / page number
+        "sf": None,         # sort field
+        "fr": {
+            "product_type": [{"name": "product_type", "value": "Mobile Phone"}],
+            "availability": [{"value": "In Stock"}],
+        },
+    }
+
+    resp = session.post(api_url, json=payload, headers=api_headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Response: {"results": [...], "total": N, ...}
+    items = data.get("results") or data.get("data", {}).get("results", [])
+
     products: list[dict] = []
+    for item in items:
+        name = item.get("product_name") or item.get("name")
+        sale_price = item.get("sale_price")
+        mrp = item.get("mrp")
+        effective_price = item.get("effective_price")
+        rating = item.get("ar") or item.get("rating")
+        storage = item.get("storage")
+        img = item.get("img_url") or item.get("image")
+        slug = item.get("slug") or item.get("url_slug")
+        link = f"{base_url}/buy-{slug}-refurbished" if slug else None
 
-    # Cards are clickable anchors to /buy-...-refurbished or /buy-...-unboxed
-    card_links = soup.select("a[href^='/buy-'][href*='-refurbished'], a[href^='/buy-'][href*='-unboxed']")
+        # Format prices as ₹ strings to match other scrapers.
+        def fmt(val):
+            if val is None:
+                return None
+            try:
+                return f"₹{int(float(val)):,}"
+            except (ValueError, TypeError):
+                return str(val)
 
-    for a in card_links:
-        href = a.get("href")
-        link = urljoin(base_url, href) if href else None
+        products.append(
+            {
+                "name": name,
+                "price": fmt(sale_price),
+                "original_price": fmt(mrp),
+                "effective_price": fmt(effective_price),
+                "discount_pct": (
+                    f"-{round((1 - float(sale_price) / float(mrp)) * 100)}%"
+                    if sale_price and mrp and float(mrp) > 0
+                    else None
+                ),
+                "rating": str(rating) if rating else None,
+                "storage": storage,
+                "image": img,
+                "link": link,
+            }
+        )
 
-        name_el = a.select_one("h2")
-        price_el = a.select_one("h3")
+    return products
 
-        name = name_el.get_text(strip=True) if name_el else None
-        price = price_el.get_text(strip=True) if price_el else None
-
-        if not link or not name or not price or "₹" not in price:
-            continue
-
-        products.append({"name": name, "price": price, "link": link})
-
-    # Deduplicate by link (Cashify may repeat anchors in layout).
-    seen = set()
-    unique: list[dict] = []
-    for p in products:
-        key = p.get("link")
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        unique.append(p)
-
-    return unique
 
 
 def main():
@@ -215,7 +273,13 @@ def main():
     cashify_results = scrape_cashify_data("apple iphone 12")
     print(f"Found {len(cashify_results)} products:")
     for product in cashify_results[:10]:
-        print(f"- {product['name']} - {product['price']}")
+        print(
+            f"- {product['name']} | {product['price']}"
+            f" (was {product.get('original_price', 'N/A')}"
+            f", {product.get('discount', 'N/A')})"
+            f" | Rating: {product.get('rating', 'N/A')}"
+            f" | {product.get('link', 'no link')}"
+        )
 
 
 if __name__ == "__main__":
