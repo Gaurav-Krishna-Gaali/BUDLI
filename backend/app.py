@@ -312,26 +312,33 @@ def _run_bedrock_analysis(
             idx, ovantica_count, refit_count, cashify_count,
         )
 
-        # Fetch Google Trends metrics (best-effort, optional).
+        # Fetch Google Trends metrics and compute Demand Signal (best-effort, optional).
         trends = fetch_trend_metrics(search_query)
         if trends:
             logger.info(
-                "Row %d: Google Trends latest=%s recent_avg=%.2f overall_avg=%.2f direction=%s",
+                "Row %d: Demand Index=%.4f (%s) | growth_rate=%.4f | acceleration=%.4f | "
+                "recent_4w_avg=%.2f | direction=%s",
                 idx,
-                trends.get("latest"),
-                trends.get("recent_avg"),
-                trends.get("overall_avg"),
+                trends.get("demand_index", 0),
+                trends.get("demand_label", "?"),
+                trends.get("growth_rate", 0),
+                trends.get("acceleration", 0),
+                trends.get("recent_4w_avg", 0),
                 trends.get("direction"),
             )
             trends_summary = (
-                f"Google Trends (normalized 0-100) for '{search_query}': "
-                f"latest={trends.get('latest')}, "
-                f"recent_avg={trends.get('recent_avg')}, "
-                f"overall_avg={trends.get('overall_avg')}, "
-                f"direction={trends.get('direction')}."
+                f"Demand Signal for '{search_query}' (Google Trends – last 12 months):\n"
+                f"  Demand Index (0-1):   {trends.get('demand_index')}  [{trends.get('demand_label')}]\n"
+                f"  Recent 4-week avg:    {trends.get('recent_4w_avg')} / 100\n"
+                f"  Prev  4-week avg:     {trends.get('prev_4w_avg')} / 100\n"
+                f"  Growth rate:          {'+' if (trends.get('growth_rate') or 0) >= 0 else ''}"
+                f"{round((trends.get('growth_rate') or 0) * 100, 1)}%\n"
+                f"  Trend acceleration:   {trends.get('acceleration')} pts/week slope\n"
+                f"  Direction:            {trends.get('direction')}\n"
+                f"  Latest data point:    {trends.get('latest')} / 100"
             )
         else:
-            trends_summary = "Google Trends data unavailable."
+            trends_summary = "Demand Signal: Google Trends data unavailable."
             logger.info("Row %d: no Google Trends data", idx)
     except Exception as e:
         logger.exception("Row %d: scrape failed: %s", idx, e)
@@ -356,16 +363,19 @@ def _run_bedrock_analysis(
         "2. velocity: string (\"Very Good\" | \"Good\" | \"Neutral\" | \"Average\" | \"Slow\")\n"
         "3. explanation: string (2–4 sentences explaining the pricing decision)\n"
         "4. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Low demand\", \"Data sparse\"]).\n\n"
-        "Velocity classification guidelines:\n"
-        "- Very Good: High demand signal (Google Trends recent_avg > 75, or many scraped listings with upward trend)\n"
-        "- Good: Above-average demand (Google Trends recent_avg 55-75, or solid scraped data showing interest)\n"
-        "- Neutral: Balanced demand (Google Trends recent_avg 40-55, or stable market conditions)\n"
-        "- Average: Below-average demand (Google Trends recent_avg 25-40, or sparse scraped data)\n"
-        "- Slow: Very low demand (Google Trends recent_avg < 25, or minimal scraped listings, downward trend)\n\n"
+        "Velocity classification guidelines (use Demand Index as your primary signal):\n"
+        "- Very Good: Demand Index >= 0.75 (Very High label) — strong momentum, positive growth, accelerating trend.\n"
+        "- Good:      Demand Index 0.55–0.74 (High label) — above-average momentum or positive growth rate.\n"
+        "- Neutral:   Demand Index 0.40–0.54 (Medium label) — stable demand, near-zero growth rate.\n"
+        "- Average:   Demand Index 0.25–0.39 (Low label) — below-average momentum or declining growth.\n"
+        "- Slow:      Demand Index < 0.25 (Very Low label) — weak momentum, negative growth, decelerating trend.\n"
+        "If Demand Signal is unavailable, fall back to scraped listing density and price spread.\n\n"
         "Pricing guidelines:\n"
-        "- Start from the central tendency of scraped prices.\n"
+        "- Start from the central tendency (median preferred) of scraped prices.\n"
         "- Adjust downward for worse condition or weaker warranty vs typical, upward for better.\n"
-        "- For Very Good/Good velocity: price more aggressively at or above market average. For Average/Slow: price conservatively below average to move inventory faster.\n"
+        "- For Very Good/Good velocity: price at or above market median to capture demand premium.\n"
+        "- For Average/Slow velocity: price 5-10% below market median to accelerate inventory turnover.\n"
+        "- A positive growth_rate (>15%) warrants an upward price nudge even if overall Demand Index is medium.\n"
         "- Ensure recommended_price is not unreasonably far from both market average and lowest competitor unless clearly justified.\n"
     )
 
