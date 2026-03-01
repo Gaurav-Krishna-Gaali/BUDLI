@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
-from script import scrape_device_data, scrape_refit_data
+from script import scrape_device_data, scrape_refit_data, scrape_cashify_data
 from trends_helper import fetch_trend_metrics
 
 
@@ -215,8 +215,8 @@ def bedrock_test(req: AnalyzeRequest) -> BedrockTestResponse:
 
 def _scrape_all_sources(search_query: str) -> tuple[list[dict], list[dict]]:
     """
-    Scrape Ovantica and ReFit Global. Returns (devices, source_urls).
-    Each device has name, price, link, source ("ovantica" | "refitglobal").
+    Scrape Ovantica, ReFit Global, and Cashify. Returns (devices, source_urls).
+    Each device has name, price, link, source ("ovantica" | "refitglobal" | "cashify").
     source_urls is a list of {"source": str, "url": str}.
     """
     devices: list[dict] = []
@@ -246,6 +246,18 @@ def _scrape_all_sources(search_query: str) -> tuple[list[dict], list[dict]]:
     except Exception as e:
         logger.warning("ReFit scrape failed: %s", e)
 
+    try:
+        cashify = scrape_cashify_data(search_query)
+        for d in cashify:
+            d["source"] = "cashify"
+            devices.append(d)
+        source_urls.append({
+            "source": "cashify",
+            "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={urllib.parse.quote_plus(search_query)}",
+        })
+    except Exception as e:
+        logger.warning("Cashify scrape failed: %s", e)
+
     return devices, source_urls
 
 
@@ -270,7 +282,8 @@ def _run_bedrock_analysis(
         f"Warranty: {warranty_months} months\n"
     )
 
-    search_query = " ".join(x for x in [brand, model, f"{storage_gb}GB"] if x)
+    # Keep search broad to get more samples: brand + model only.
+    search_query = " ".join(x for x in [brand, model] if x)
     
     logger.info(
         "Row %d: querying '%s' (brand=%s, model=%s, storage=%sGB)",
@@ -285,9 +298,10 @@ def _run_bedrock_analysis(
         scraped_devices, source_urls = _scrape_all_sources(search_query)
         ovantica_count = sum(1 for d in scraped_devices if d.get("source") == "ovantica")
         refit_count = sum(1 for d in scraped_devices if d.get("source") == "refitglobal")
+        cashify_count = sum(1 for d in scraped_devices if d.get("source") == "cashify")
         logger.info(
-            "Row %d: scraped %d from Ovantica, %d from ReFit",
-            idx, ovantica_count, refit_count,
+            "Row %d: scraped %d from Ovantica, %d from ReFit, %d from Cashify",
+            idx, ovantica_count, refit_count, cashify_count,
         )
 
         # Fetch Google Trends metrics (best-effort, optional).
@@ -316,6 +330,7 @@ def _run_bedrock_analysis(
         fallback_urls = [
             {"source": "ovantica", "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(search_query)}"},
             {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}"},
+            {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={urllib.parse.quote_plus(search_query)}"},
         ]
         return "", "", "", [], fallback_urls[0]["url"], fallback_urls
 
@@ -325,7 +340,7 @@ def _run_bedrock_analysis(
         "You receive:\n"
         "- Device attributes (brand, model, storage, condition, warranty, RAM, network type)\n"
         "- External market signals from scraped listings (price, title, link, source) in JSON. "
-        "Sources include 'ovantica' and 'refitglobal' (ReFit Global). Use both when available.\n"
+        "Sources include 'ovantica', 'refitglobal' (ReFit Global), and 'cashify'. Use all when available.\n"
         "- Search demand signals from Google Trends (normalized 0-100 indices over the last 12 months).\n\n"
         "For the given device and signals, decide a competitive selling strategy.\n\n"
         "Return ONLY a JSON object with the following fields:\n\n"

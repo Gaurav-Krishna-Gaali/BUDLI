@@ -369,7 +369,12 @@ export async function processRun(
       const marketSignals: MarketSignal[] =
         r.source_urls && Array.isArray(r.source_urls) && r.source_urls.length > 0
           ? r.source_urls.map((s: { source: string; url: string }) => ({
-              source: s.source === "refitglobal" ? "ReFit Global (Search)" : "Ovantica (Search)",
+              source:
+                s.source === "refitglobal"
+                  ? "ReFit Global (Search)"
+                  : s.source === "cashify"
+                    ? "Cashify (Search)"
+                    : "Ovantica (Search)",
               price: rec,
               condition: "Scraped Search Query",
               url: s.url,

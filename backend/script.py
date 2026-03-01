@@ -134,6 +134,60 @@ def scrape_refit_data(query: str):
     return products
 
 
+def scrape_cashify_data(query: str):
+    """
+    Scrape product data from Cashify search results.
+
+    Returns a list of dicts: {"name", "price", "link"}.
+    """
+    search_url = "https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search"
+    response = requests.get(
+        search_url,
+        params={"q": query},
+        headers=HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    try:
+        soup = BeautifulSoup(response.text, "lxml")
+    except Exception:
+        soup = BeautifulSoup(response.text, "html.parser")
+
+    base_url = "https://www.cashify.in"
+    products: list[dict] = []
+
+    # Cards are clickable anchors to /buy-...-refurbished or /buy-...-unboxed
+    card_links = soup.select("a[href^='/buy-'][href*='-refurbished'], a[href^='/buy-'][href*='-unboxed']")
+
+    for a in card_links:
+        href = a.get("href")
+        link = urljoin(base_url, href) if href else None
+
+        name_el = a.select_one("h2")
+        price_el = a.select_one("h3")
+
+        name = name_el.get_text(strip=True) if name_el else None
+        price = price_el.get_text(strip=True) if price_el else None
+
+        if not link or not name or not price or "₹" not in price:
+            continue
+
+        products.append({"name": name, "price": price, "link": link})
+
+    # Deduplicate by link (Cashify may repeat anchors in layout).
+    seen = set()
+    unique: list[dict] = []
+    for p in products:
+        key = p.get("link")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+
+    return unique
+
+
 def main():
     # Ensure ₹ prints correctly on Windows terminals.
     try:
@@ -155,6 +209,12 @@ def main():
     refit_results = scrape_refit_data("apple iphone 13")
     print(f"Found {len(refit_results)} products:")
     for product in refit_results:
+        print(f"- {product['name']} - {product['price']}")
+
+    print("\n=== Cashify ===")
+    cashify_results = scrape_cashify_data("apple iphone 12")
+    print(f"Found {len(cashify_results)} products:")
+    for product in cashify_results[:10]:
         print(f"- {product['name']} - {product['price']}")
 
 
