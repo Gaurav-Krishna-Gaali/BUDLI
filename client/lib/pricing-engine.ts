@@ -398,7 +398,7 @@ export async function processRun(
         recommendedPrice: rec,
         priceLow: low,
         priceHigh: high,
-        confidenceScore: rec > 0 ? 80 : 0,
+        confidenceScore: rec > 0 ? (r.confidence_score ?? 80) : 0,
         velocityCategory: velCat,
         velocityDaysEstimate: velDays,
         pricingExplanation: r.explanation || "No explanation provided.",

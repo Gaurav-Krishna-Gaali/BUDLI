@@ -193,6 +193,7 @@ class AnalyzeDevicesResponseItem(BaseModel):
     velocity: str
     explanation: str
     risk_flags: list[str]
+    confidence_score: Optional[int] = None
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
     demand_signal: Optional[DemandSignal] = None
@@ -290,7 +291,7 @@ def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str, list[dict], dict]:
+) -> tuple[Optional[str], Optional[str], Optional[str], list[str], Optional[int], str, list[dict], dict]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -375,7 +376,12 @@ def _run_bedrock_analysis(
         "1. recommended_price: number (in INR, no currency symbol, e.g. 28999)\n"
         "2. velocity: string (\"Very Good\" | \"Good\" | \"Neutral\" | \"Average\" | \"Slow\")\n"
         "3. explanation: string (2–4 sentences explaining the pricing decision)\n"
-        "4. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Low demand\", \"Data sparse\"]).\n\n"
+        "4. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Low demand\", \"Data sparse\"]).\n"
+        "5. confidence_score: integer 0-100 reflecting how confident you are in this "
+        "recommendation given the scraped data quality, listing density, demand signal "
+        "availability, and price spread. Use 90-100 for abundant, consistent data; "
+        "70-89 for moderate data; 50-69 for sparse/conflicting data; below 50 for "
+        "very limited data.\n\n"
         "Velocity classification guidelines (use Demand Index as your primary signal):\n"
         "- Very Good: Demand Index >= 0.75 (Very High label) — strong momentum, positive growth, accelerating trend.\n"
         "- Good:      Demand Index 0.55–0.74 (High label) — above-average momentum or positive growth rate.\n"
@@ -415,6 +421,7 @@ def _run_bedrock_analysis(
         velocity: Optional[str] = ""
         explanation: Optional[str] = ""
         risk_flags: list[str] = []
+        confidence_score: Optional[int] = None
         try:
             # Strip markdown code fences if present (e.g. ```json ... ```)
             text = analysis_text.strip()
@@ -430,6 +437,7 @@ def _run_bedrock_analysis(
             vel_value = parsed.get("velocity")
             explanation = parsed.get("explanation", "")
             risk_flags = parsed.get("risk_flags", [])
+            confidence_score = parsed.get("confidence_score")
             
             if value is not None:
                 predicted_price = str(value)
@@ -454,11 +462,11 @@ def _run_bedrock_analysis(
             velocity = ""
 
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return predicted_price, velocity, explanation, risk_flags, primary_url, source_urls, trends
+        return predicted_price, velocity, explanation, risk_flags, confidence_score, primary_url, source_urls, trends
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return "", "", "", [], primary_url, source_urls, {}
+        return "", "", "", [], None, primary_url, source_urls, {}
 
 
 @app.post(
@@ -516,7 +524,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, source_url, source_urls, _trends = _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls, _trends = _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -544,7 +552,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, source_url, source_urls, trends = _run_bedrock_analysis(
+        price, vel, explanation, flags, confidence_score, source_url, source_urls, trends = _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -570,6 +578,7 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             velocity=vel or "",
             explanation=explanation or "",
             risk_flags=flags or [],
+            confidence_score=confidence_score,
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
             demand_signal=demand_signal,
