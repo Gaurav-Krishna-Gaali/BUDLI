@@ -176,6 +176,17 @@ class SourceUrl(BaseModel):
     url: str
 
 
+class DemandSignal(BaseModel):
+    demand_index: Optional[float] = None     # 0-1 composite score
+    demand_label: Optional[str] = None       # Very High / High / Medium / Low / Very Low
+    growth_rate: Optional[float] = None      # (recent - prev) / prev
+    acceleration: Optional[float] = None     # slope pts/week
+    direction: Optional[str] = None          # increasing / flat / decreasing
+    recent_4w_avg: Optional[float] = None    # mean of last 4 weeks (0-100)
+    prev_4w_avg: Optional[float] = None
+    latest: Optional[int] = None
+
+
 class AnalyzeDevicesResponseItem(BaseModel):
     id: str
     predicted_price: str
@@ -184,6 +195,7 @@ class AnalyzeDevicesResponseItem(BaseModel):
     risk_flags: list[str]
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
+    demand_signal: Optional[DemandSignal] = None
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem]
@@ -278,7 +290,7 @@ def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str, list[dict]]:
+) -> tuple[Optional[str], Optional[str], Optional[str], list[str], str, list[dict], dict]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -338,6 +350,7 @@ def _run_bedrock_analysis(
                 f"  Latest data point:    {trends.get('latest')} / 100"
             )
         else:
+            trends = {}
             trends_summary = "Demand Signal: Google Trends data unavailable."
             logger.info("Row %d: no Google Trends data", idx)
     except Exception as e:
@@ -347,7 +360,7 @@ def _run_bedrock_analysis(
             {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}"},
             {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={urllib.parse.quote_plus(search_query)}"},
         ]
-        return "", "", "", [], fallback_urls[0]["url"], fallback_urls
+        return "", "", "", [], fallback_urls[0]["url"], fallback_urls, {}
 
     # Build a structured pricing prompt and ask for JSON.
     instructions = (
@@ -441,11 +454,11 @@ def _run_bedrock_analysis(
             velocity = ""
 
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return predicted_price, velocity, explanation, risk_flags, primary_url, source_urls
+        return predicted_price, velocity, explanation, risk_flags, primary_url, source_urls, trends
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return "", "", "", [], primary_url, source_urls
+        return "", "", "", [], primary_url, source_urls, {}
 
 
 @app.post(
@@ -503,7 +516,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, source_url, source_urls = _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, source_url, source_urls, _trends = _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -531,7 +544,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, source_url, source_urls = _run_bedrock_analysis(
+        price, vel, explanation, flags, source_url, source_urls, trends = _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -541,6 +554,16 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             d.condition_tier,
             d.warranty_months,
         )
+        demand_signal = DemandSignal(
+            demand_index=trends.get("demand_index"),
+            demand_label=trends.get("demand_label"),
+            growth_rate=trends.get("growth_rate"),
+            acceleration=trends.get("acceleration"),
+            direction=trends.get("direction"),
+            recent_4w_avg=trends.get("recent_4w_avg"),
+            prev_4w_avg=trends.get("prev_4w_avg"),
+            latest=trends.get("latest"),
+        ) if trends else None
         results.append(AnalyzeDevicesResponseItem(
             id=d.id,
             predicted_price=price or "",
@@ -549,6 +572,7 @@ def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             risk_flags=flags or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
+            demand_signal=demand_signal,
         ))
         
     return AnalyzeDevicesResponse(results=results)

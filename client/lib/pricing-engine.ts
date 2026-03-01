@@ -4,6 +4,7 @@ import type {
   MarketSignal,
   VelocityCategory,
   KBPattern,
+  DemandSignal,
 } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -405,6 +406,7 @@ export async function processRun(
         riskFlags: r.risk_flags || [],
         marketSignals,
         sourceUrl: r.source_url,
+        demandSignal: r.demand_signal as DemandSignal | undefined,
       };
     });
 
