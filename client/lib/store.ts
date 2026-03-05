@@ -119,7 +119,7 @@ export function parseCSV(text: string): Record<string, string>[] {
 
 export function generateOutputCSV(run: Run): string {
   const headers = [
-    "brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months",
+    "Storage", "Model", "Ram", "Color", "Condition", "Price",
     "recommended_price", "predicted_price", "price_high", "confidence",
     "velocity", "velocity_days",
     "explanation", "velocity_explanation", "risk_flags",
@@ -131,15 +131,14 @@ export function generateOutputCSV(run: Run): string {
     if (!result) return Array(headers.length).fill("").join(",")
 
     const row = [
-      device.brand,
+      device.storage,
       device.model,
       device.ram,
-      device.storage,
-      device.networkType,
-      device.conditionTier,
-      device.warrantyMonths.toString(),
+      device.color,
+      device.condition,
+      device.price ?? "",
       result.recommendedPrice.toString(),
-      result.priceLow.toString(), // predicted_price/low
+      result.priceLow.toString(),
       result.priceHigh.toString(),
       result.confidenceScore.toString(),
       result.velocityCategory,
@@ -160,11 +159,11 @@ export function generateOutputCSV(run: Run): string {
 }
 
 export function generateInputTemplateCSV(): string {
-  const headers = ["brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months"]
+  const headers = ["Storage", "Model", "Ram", "Color", "Condition", "Price"]
   const examples = [
-    ["Apple", "iPhone 16", "4", "128", "5G", "Good", "6"],
-    ["Apple", "iPhone 12", "4", "64", "5G", "Fair", "3"],
-    ["Samsung", "Galaxy S21", "8", "128", "5G", "Good", "6"],
+    ["128", "iPhone 16", "6", "Black", "good", "45000"],
+    ["64", "iPhone 12", "4", "Blue", "fair", "28000"],
+    ["128", "Galaxy S21", "8", "Phantom Black", "superb", "32000"],
   ]
   return [headers.join(","), ...examples.map(r => r.join(","))].join("\n")
 }

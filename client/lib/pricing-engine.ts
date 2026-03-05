@@ -5,9 +5,50 @@ import type {
   VelocityCategory,
   KBPattern,
   DemandSignal,
+  ScrapeStartResponse,
+  ScrapeResultsResponse,
 } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// -------------------------------------------------------------------
+// Browser scrape endpoints (POST /scrape/start, GET /scrape/results/{job_id})
+// -------------------------------------------------------------------
+
+export async function startBrowserScrape(query: string): Promise<ScrapeStartResponse> {
+  const res = await fetch(`${API_BASE_URL}/scrape/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: query.trim() }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || res.statusText || "Failed to start scrape")
+  }
+  return res.json()
+}
+
+export async function getScrapeResults(jobId: string): Promise<ScrapeResultsResponse> {
+  const res = await fetch(`${API_BASE_URL}/scrape/results/${jobId}`)
+  if (!res.ok) {
+    if (res.status === 404) throw new Error("Job not found")
+    throw new Error(res.statusText || "Failed to get results")
+  }
+  return res.json()
+}
+
+// Response shape from POST /analyze-devices (aligned with backend)
+interface AnalyzeDevicesApiResult {
+  id: string
+  predicted_price?: string
+  velocity?: string
+  explanation?: string
+  risk_flags?: string[]
+  confidence_score?: number | null
+  source_url?: string
+  source_urls?: Array<{ source: string; url: string }>
+  demand_signal?: import("./types").DemandSignal | null
+}
 
 // -------------------------------------------------------------------
 // -------------------------------------------------------------------
@@ -327,16 +368,17 @@ export async function processRun(
   kbPatterns: KBPattern[],
 ): Promise<PricingResult[]> {
   try {
+    // Map DeviceInput (Storage, Model, Ram, Color, Condition, Price) to analyze-devices API shape
     const payload = {
       devices: devices.map((d) => ({
         id: d.id,
-        brand: d.brand,
+        brand: "",
         model: d.model,
         storage_gb: d.storage,
         ram_gb: d.ram,
-        network_type: d.networkType,
-        condition_tier: d.conditionTier,
-        warranty_months: d.warrantyMonths.toString(),
+        network_type: "4G",
+        condition_tier: d.condition,
+        warranty_months: "0",
       })),
     };
 
@@ -350,8 +392,8 @@ export async function processRun(
       throw new Error(`API error: ${res.statusText}`);
     }
 
-    const data = await res.json();
-    const results: PricingResult[] = data.results.map((r: any) => {
+    const data = await res.json() as { results: AnalyzeDevicesApiResult[] };
+    const results: PricingResult[] = data.results.map((r: AnalyzeDevicesApiResult) => {
       const rec = parseInt(r.predicted_price || "0") || 0;
       const low = Math.round((rec * 0.92) / 100) * 100;
       const high = Math.round((rec * 1.08) / 100) * 100;

@@ -39,11 +39,12 @@ export default function AnalyticsPage() {
   allDevices.forEach(d => {
     const result = allResults.find(r => r.deviceId === d.id)
     if (!result) return
-    const existing = brandMap.get(d.brand) ?? { prices: [], confidence: [], fast: 0 }
+    const key = d.model || "Unknown"
+    const existing = brandMap.get(key) ?? { prices: [], confidence: [], fast: 0 }
     existing.prices.push(result.recommendedPrice)
     existing.confidence.push(result.confidenceScore)
     if (result.velocityCategory === "Fast") existing.fast++
-    brandMap.set(d.brand, existing)
+    brandMap.set(key, existing)
   })
   const brandStats: BrandStat[] = Array.from(brandMap.entries()).map(([brand, val]) => ({
     brand,
@@ -56,7 +57,7 @@ export default function AnalyticsPage() {
   // Condition distribution
   const conditionMap = new Map<string, number>()
   allDevices.forEach(d => {
-    conditionMap.set(d.conditionTier, (conditionMap.get(d.conditionTier) ?? 0) + 1)
+    conditionMap.set(d.condition, (conditionMap.get(d.condition) ?? 0) + 1)
   })
 
   // Velocity distribution
@@ -154,12 +155,12 @@ export default function AnalyticsPage() {
             {brandStats.length > 0 && (
               <div className="bg-card border border-border rounded-lg overflow-hidden">
                 <div className="px-5 py-4 border-b border-border">
-                  <h3 className="text-sm font-semibold">Brand Breakdown</h3>
+                  <h3 className="text-sm font-semibold">Model breakdown</h3>
                 </div>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
-                      {["Brand", "Devices", "Avg Price", "Avg Confidence", "Fast Movers"].map(h => (
+                      {["Model", "Devices", "Avg Price", "Avg Confidence", "Fast Movers"].map(h => (
                         <th key={h} className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide px-5 py-3">{h}</th>
                       ))}
                     </tr>

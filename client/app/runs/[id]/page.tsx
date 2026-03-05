@@ -75,11 +75,11 @@ export default function RunResultsPage() {
         const approvedPrice = result.humanApprovedPrice ?? result.recommendedPrice
         entries.push({
           id: crypto.randomUUID(),
-          brand: device.brand,
+          brand: "",
           model: device.model,
           ram: device.ram,
           storage: device.storage,
-          conditionTier: device.conditionTier,
+          conditionTier: device.condition,
           recommendedPrice: result.recommendedPrice,
           humanApprovedPrice: approvedPrice,
           delta: approvedPrice - result.recommendedPrice,
@@ -176,11 +176,11 @@ export default function RunResultsPage() {
                 <div className="flex items-center gap-4 px-5 py-4">
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-foreground">
-                      {device.brand} {device.model}
+                      {device.model}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {device.ram} &bull; {device.storage} &bull; {device.networkType} &bull; {device.conditionTier}
-                      {device.warrantyMonths > 0 && ` &bull; ${device.warrantyMonths}mo warranty`}
+                      {device.storage}GB &bull; {device.ram}GB RAM &bull; {device.color} &bull; {device.condition}
+                      {device.price ? ` &bull; ₹${device.price}` : ""}
                     </p>
                   </div>
 

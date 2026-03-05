@@ -1,18 +1,19 @@
-export type ConditionTier = "Like New" | "Excellent" | "Good" | "Fair"
+export type ConditionTier = "Like New" | "Excellent" | "Good" | "Fair" | "superb" | "fair" | "good"
+/** Condition for device form/CSV (aligned with main.py schema) */
+export type Condition = "superb" | "fair" | "good"
 export type NetworkType = "5G" | "4G" | "3G"
 export type VelocityCategory = "Fast" | "Medium" | "Slow"
 export type RunStatus = "pending" | "processing" | "completed" | "error"
 
+/** Device input: Storage, Model, Ram, Color, Condition, Price (aligned with main.py) */
 export interface DeviceInput {
   id: string
-  brand: string
+  storage: string
   model: string
   ram: string
-  storage: string
-  networkType: NetworkType
-  conditionTier: ConditionTier
-  warrantyMonths: number
-  customerSamplePrice?: number
+  color: string
+  condition: Condition
+  price?: string
 }
 
 export interface MarketSignal {
@@ -89,4 +90,34 @@ export interface KBPattern {
   avgDelta: number
   occurrences: number
   insight: string
+}
+
+// Browser scrape job (POST /scrape/start, GET /scrape/results/{job_id})
+export interface ScrapeStartResponse {
+  job_id: string
+  live_urls: string[]
+  query: string
+}
+
+export interface ScrapedDeviceItem {
+  name?: string | null
+  price?: string | null
+  link?: string | null
+  source?: string | null
+  storage?: string | null
+  original_price?: string | null
+  effective_price?: string | null
+  discount_pct?: string | null
+  rating?: string | null
+  image?: string | null
+}
+
+export interface ScrapeResultsResponse {
+  job_id: string
+  status: "running" | "finished" | "error"
+  query?: string
+  error?: string
+  results?: Record<string, unknown[]>
+  devices?: ScrapedDeviceItem[]
+  count?: number
 }

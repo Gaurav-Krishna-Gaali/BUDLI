@@ -10,24 +10,19 @@ import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
 import { saveRun, parseCSV, generateInputTemplateCSV, getKBPatterns } from "@/lib/store"
 import { processRun } from "@/lib/pricing-engine"
-import type { DeviceInput, ConditionTier, NetworkType } from "@/lib/types"
+import type { DeviceInput, Condition } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const CONDITIONS: ConditionTier[] = ["Like New", "Excellent", "Good", "Fair"]
-const NETWORKS: NetworkType[] = ["5G", "4G", "3G"]
-const WARRANTY_OPTIONS = [0, 3, 6, 12]
+const CONDITIONS: Condition[] = ["superb", "fair", "good"]
 
 function emptyDevice(): DeviceInput {
   return {
     id: crypto.randomUUID(),
-    brand: "",
+    storage: "",
     model: "",
     ram: "",
-    storage: "",
-    networkType: "4G",
-    conditionTier: "Good",
-    warrantyMonths: 0,
-    customerSamplePrice: undefined,
+    color: "",
+    condition: "good",
   }
 }
 
@@ -79,17 +74,18 @@ export default function NewRunPage() {
         }
         */
 
-        const mapped: DeviceInput[] = rows.map(row => ({
-          id: crypto.randomUUID(),
-          brand: row["brand"] ?? "",
-          model: row["model"] ?? "",
-          ram: row["ram_gb"] ?? "",
-          storage: row["storage_gb"] ?? "",
-          networkType: (row["network_type"] as NetworkType) || "4G",
-          conditionTier: (row["condition_tier"] as ConditionTier) || "Good",
-          warrantyMonths: parseInt(row["warranty_months"] ?? "0") || 0,
-          customerSamplePrice: undefined, // no longer in CSV template
-        }))
+        const mapped: DeviceInput[] = rows.map(row => {
+          const cond = (row["Condition"] ?? row["condition"] ?? "good").toLowerCase()
+          return {
+            id: crypto.randomUUID(),
+            storage: row["Storage"] ?? row["storage"] ?? "",
+            model: row["Model"] ?? row["model"] ?? "",
+            ram: row["Ram"] ?? row["ram"] ?? "",
+            color: row["Color"] ?? row["color"] ?? "",
+            condition: (cond === "superb" || cond === "fair" || cond === "good" ? cond : "good") as Condition,
+            price: row["Price"] ?? row["price"] ?? undefined,
+          }
+        })
         setDevices(mapped)
         setCsvSuccess(true)
       } catch {
@@ -112,10 +108,10 @@ export default function NewRunPage() {
 
   const validateDevices = (): string | null => {
     for (const d of devices) {
-      if (!d.brand) return "Brand is required for all devices."
+      if (!d.storage) return "Storage is required for all devices."
       if (!d.model) return "Model is required for all devices."
       if (!d.ram) return "RAM is required for all devices."
-      if (!d.storage) return "Storage is required for all devices."
+      if (!d.color) return "Color is required for all devices."
     }
     return null
   }
@@ -148,7 +144,7 @@ export default function NewRunPage() {
     }
   }
 
-  const isValid = devices.every(d => d.brand && d.model && d.ram && d.storage)
+  const isValid = devices.every(d => d.storage && d.model && d.ram && d.color)
 
   return (
     <AppShell>
@@ -200,7 +196,7 @@ export default function NewRunPage() {
             >
               <UploadCloud className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
               <p className="text-sm font-medium text-foreground mb-1">Click to upload CSV</p>
-              <p className="text-xs text-muted-foreground">Up to 10 devices &bull; Brand, Model, RAM, Storage, Network, Condition, Warranty</p>
+              <p className="text-xs text-muted-foreground">Up to 10 devices &bull; Storage, Model, Ram, Color, Condition (superb/fair/good), Price</p>
               <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
             </div>
             <div className="flex items-center gap-3 mt-3">
@@ -247,13 +243,13 @@ export default function NewRunPage() {
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 <div>
-                  <Label className="text-xs mb-1 block">Brand *</Label>
+                  <Label className="text-xs mb-1 block">Storage *</Label>
                   <Input
-                    placeholder="e.g. Apple"
-                    value={device.brand}
-                    onChange={e => updateDevice(device.id, "brand", e.target.value)}
+                    placeholder="e.g. 128"
+                    value={device.storage}
+                    onChange={e => updateDevice(device.id, "storage", e.target.value)}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -267,7 +263,7 @@ export default function NewRunPage() {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">RAM (GB) *</Label>
+                  <Label className="text-xs mb-1 block">Ram *</Label>
                   <Input
                     placeholder="e.g. 6"
                     value={device.ram}
@@ -276,28 +272,17 @@ export default function NewRunPage() {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">Storage (GB) *</Label>
+                  <Label className="text-xs mb-1 block">Color *</Label>
                   <Input
-                    placeholder="e.g. 128"
-                    value={device.storage}
-                    onChange={e => updateDevice(device.id, "storage", e.target.value)}
+                    placeholder="e.g. Black"
+                    value={device.color}
+                    onChange={e => updateDevice(device.id, "color", e.target.value)}
                     className="h-8 text-xs"
                   />
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">Network</Label>
-                  <Select value={device.networkType} onValueChange={v => updateDevice(device.id, "networkType", v as NetworkType)}>
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {NETWORKS.map(n => <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
                   <Label className="text-xs mb-1 block">Condition</Label>
-                  <Select value={device.conditionTier} onValueChange={v => updateDevice(device.id, "conditionTier", v as ConditionTier)}>
+                  <Select value={device.condition} onValueChange={v => updateDevice(device.id, "condition", v as Condition)}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -307,26 +292,14 @@ export default function NewRunPage() {
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs mb-1 block">Warranty (Months)</Label>
-                  <Select value={String(device.warrantyMonths)} onValueChange={v => updateDevice(device.id, "warrantyMonths", parseInt(v))}>
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WARRANTY_OPTIONS.map(w => <SelectItem key={w} value={String(w)} className="text-xs">{w === 0 ? "No warranty" : `${w} months`}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {/* <div>
-                  <Label className="text-xs mb-1 block">Sample Price (₹)</Label>
+                  <Label className="text-xs mb-1 block">Price (optional)</Label>
                   <Input
-                    type="number"
-                    placeholder="Optional"
-                    value={device.customerSamplePrice ?? ""}
-                    onChange={e => updateDevice(device.id, "customerSamplePrice", parseFloat(e.target.value) || 0)}
+                    placeholder="e.g. 45000"
+                    value={device.price ?? ""}
+                    onChange={e => updateDevice(device.id, "price", e.target.value)}
                     className="h-8 text-xs"
                   />
-                </div> */}
+                </div>
               </div>
             </div>
           ))}

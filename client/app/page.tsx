@@ -1,16 +1,19 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import {
   UploadCloud, History, BookOpen, BarChart2,
-  ArrowRight, CheckCircle2, Clock, AlertCircle, ChevronRight
+  ArrowRight, CheckCircle2, Clock, AlertCircle, ChevronRight,
+  Search, Loader2, ExternalLink
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, getKBEntries, getKBPatterns } from "@/lib/store"
+import { startBrowserScrape, getScrapeResults } from "@/lib/pricing-engine"
 import { VelocityBadge } from "@/components/velocity-badge"
-import type { Run } from "@/lib/types"
+import type { Run, ScrapeResultsResponse } from "@/lib/types"
 
 const WORKFLOW_STEPS = [
   { step: "01", title: "Upload Devices", desc: "Provide a CSV or enter up to 10 device models with specs and condition." },
@@ -21,16 +24,79 @@ const WORKFLOW_STEPS = [
   { step: "06", title: "Feedback to KB", desc: "Approved decisions are stored — future runs learn from this history." },
 ]
 
+const POLL_INTERVAL_MS = 2500
+
 export default function DashboardPage() {
   const [runs, setRuns] = useState<Run[]>([])
   const [kbCount, setKbCount] = useState(0)
   const [patternCount, setPatternCount] = useState(0)
+
+  // Live scrape (browser) state
+  const [scrapeQuery, setScrapeQuery] = useState("")
+  const [scrapeJobId, setScrapeJobId] = useState<string | null>(null)
+  const [scrapeStatus, setScrapeStatus] = useState<"idle" | "starting" | "running" | "finished" | "error">("idle")
+  const [scrapeResult, setScrapeResult] = useState<ScrapeResultsResponse | null>(null)
+  const [scrapeError, setScrapeError] = useState<string | null>(null)
+  const [liveUrls, setLiveUrls] = useState<string[]>([])
 
   useEffect(() => {
     getRuns().then(setRuns)
     getKBEntries().then(entries => setKbCount(entries.length))
     getKBPatterns().then(patterns => setPatternCount(patterns.length))
   }, [])
+
+  // Poll scrape results when job is running
+  const pollScrapeResults = useCallback(async (jobId: string) => {
+    try {
+      const data = await getScrapeResults(jobId)
+      setScrapeResult(data)
+      if (data.status === "finished") {
+        setScrapeStatus("finished")
+        return
+      }
+      if (data.status === "error") {
+        setScrapeStatus("error")
+        setScrapeError(data.error || "Scrape failed")
+        return
+      }
+      // still running: poll again
+      setTimeout(() => pollScrapeResults(jobId), POLL_INTERVAL_MS)
+    } catch (e) {
+      setScrapeStatus("error")
+      setScrapeError(e instanceof Error ? e.message : "Failed to fetch results")
+    }
+  }, [])
+
+  useEffect(() => {
+    if (scrapeJobId && scrapeStatus === "running") {
+      pollScrapeResults(scrapeJobId)
+    }
+  }, [scrapeJobId, scrapeStatus, pollScrapeResults])
+
+  const handleStartScrape = async () => {
+    const query = scrapeQuery.trim()
+    if (!query) return
+    setScrapeError(null)
+    setScrapeResult(null)
+    setScrapeStatus("starting")
+    try {
+      const { job_id, live_urls } = await startBrowserScrape(query)
+      setScrapeJobId(job_id)
+      setLiveUrls(live_urls || [])
+      setScrapeStatus("running")
+    } catch (e) {
+      setScrapeStatus("error")
+      setScrapeError(e instanceof Error ? e.message : "Failed to start scrape")
+    }
+  }
+
+  const resetScrape = () => {
+    setScrapeJobId(null)
+    setScrapeStatus("idle")
+    setScrapeResult(null)
+    setScrapeError(null)
+    setLiveUrls([])
+  }
 
   const allResults = runs.flatMap(r => r.results)
   const avgConfidence = allResults.length
@@ -171,6 +237,122 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Live price search (browser scrape) */}
+        <div className="mb-10">
+          <h2 className="text-sm font-semibold text-foreground mb-4">Live price search (browser scrape)</h2>
+          <div className="bg-card border border-border rounded-lg p-5">
+            <p className="text-xs text-muted-foreground mb-4">
+              Start a browser-based scrape across Ovantica, ReFit Global, and Cashify. Requires <code className="bg-muted px-1 rounded">BROWSER_USE_API_KEY</code> on the server.
+            </p>
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <Input
+                placeholder="e.g. Apple iPhone 15 Pro Max"
+                value={scrapeQuery}
+                onChange={(e) => setScrapeQuery(e.target.value)}
+                className="max-w-xs h-9 text-sm"
+                onKeyDown={(e) => e.key === "Enter" && handleStartScrape()}
+              />
+              <Button
+                size="sm"
+                onClick={handleStartScrape}
+                disabled={!scrapeQuery.trim() || scrapeStatus === "starting" || scrapeStatus === "running"}
+              >
+                {scrapeStatus === "starting" ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Starting…
+                  </>
+                ) : scrapeStatus === "running" ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Scraping…
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4 mr-2" />
+                    Start scrape
+                  </>
+                )}
+              </Button>
+              {(scrapeStatus === "finished" || scrapeStatus === "error") && (
+                <Button variant="ghost" size="sm" onClick={resetScrape}>
+                  Reset
+                </Button>
+              )}
+            </div>
+            {/* Live session iframes: show while job is running, hide when we have results */}
+            {liveUrls.length > 0 && scrapeStatus === "running" && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-muted-foreground mb-2">
+                  Live browser session(s) — watch until results are ready. If the frame is blank, use &quot;Open in new tab&quot; (the session may block embedding).
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {liveUrls.map((url, i) => (
+                    <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
+                      <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 truncate" title={url}>
+                        Session {i + 1}
+                      </p>
+                      <iframe
+                        src={url}
+                        title={`Live scrape session ${i + 1}`}
+                        className="w-full h-[320px] min-h-[240px] border-0 bg-background"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        allow="fullscreen"
+                      />
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
+                      >
+                        Open in new tab <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {scrapeError && (
+              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2 mb-4">
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                {scrapeError}
+              </div>
+            )}
+            {scrapeStatus === "finished" && scrapeResult?.devices && scrapeResult.devices.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Results ({scrapeResult.count ?? scrapeResult.devices.length} devices)
+                </p>
+                <div className="border border-border rounded-md overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-muted/50 border-b border-border">
+                        <th className="text-left py-2 px-3 font-medium">Name</th>
+                        <th className="text-left py-2 px-3 font-medium">Price</th>
+                        <th className="text-left py-2 px-3 font-medium">Source</th>
+                        <th className="text-left py-2 px-3 font-medium">Storage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scrapeResult.devices.map((d, i) => (
+                        <tr key={i} className="border-b border-border last:border-0">
+                          <td className="py-2 px-3">{d.name ?? "—"}</td>
+                          <td className="py-2 px-3">{d.price ?? "—"}</td>
+                          <td className="py-2 px-3">{d.source ?? "—"}</td>
+                          <td className="py-2 px-3">{d.storage ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {scrapeStatus === "finished" && scrapeResult?.devices?.length === 0 && (
+              <p className="text-xs text-muted-foreground">No devices returned from scrape.</p>
+            )}
+          </div>
+        </div>
+
         {/* Workflow */}
         <div>
           <h2 className="text-sm font-semibold text-foreground mb-4">How It Works</h2>
@@ -191,7 +373,7 @@ export default function DashboardPage() {
           <div className="mt-4 bg-secondary/50 border border-border rounded-lg px-5 py-4 flex items-start gap-3">
             <AlertCircle className="w-4 h-4 text-primary mt-0.5 shrink-0" />
             <p className="text-xs text-muted-foreground leading-relaxed">
-              <span className="font-semibold text-foreground">Data sources:</span> Pricing benchmarks are referenced from Flipkart (new price), OLX (used market average), and Cashify (certified refurbished average) for the Indian market. No live scraping — market data is embedded for POC purposes. All final pricing decisions remain with the pricing manager.
+              <span className="font-semibold text-foreground">Data sources:</span> Use &quot;Live price search&quot; above to scrape Ovantica, ReFit Global, and Cashify via the browser (requires <code className="bg-muted px-1 rounded">BROWSER_USE_API_KEY</code>). New runs use the same scrape + Bedrock flow and show source URLs and demand signals per device. All final pricing decisions remain with the pricing manager.
             </p>
           </div>
         </div>
