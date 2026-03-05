@@ -1,17 +1,20 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText } from "lucide-react"
+import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
 import { saveRun, parseCSV, generateInputTemplateCSV, getKBPatterns } from "@/lib/store"
-import { processRun } from "@/lib/pricing-engine"
-import type { DeviceInput, Condition } from "@/lib/types"
+import { startAnalyzeDevices, getAnalyzeDevicesStatus, mapAnalyzeResultsToPricingResults } from "@/lib/pricing-engine"
+import type { DeviceInput, Condition, BrowserScrapeRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
+
+const POLL_INTERVAL_MS = 2500
 
 const CONDITIONS: Condition[] = ["superb", "fair", "good"]
 
@@ -36,6 +39,10 @@ export default function NewRunPage() {
   const [processing, setProcessing] = useState(false)
   const [activeTab, setActiveTab] = useState<"manual" | "csv">("manual")
   const [jobId, setJobId] = useState<string | null>(null)
+  const [liveUrls, setLiveUrls] = useState<string[]>([])
+  const [analyzeJobId, setAnalyzeJobId] = useState<string | null>(null)
+  const [lastScrapeResults, setLastScrapeResults] = useState<Record<string, BrowserScrapeRow[]> | null>(null)
+  const [completedRunId, setCompletedRunId] = useState<string | null>(null)
 
   const addDevice = () => {
     if (devices.length >= 10) return
@@ -122,30 +129,81 @@ export default function NewRunPage() {
 
     const runId = crypto.randomUUID()
     setJobId(runId)
+    setCsvError(null)
+    setLastScrapeResults(null)
+    setCompletedRunId(null)
     setProcessing(true)
+    setLiveUrls([])
+    setAnalyzeJobId(null)
 
     try {
-      const kbPatterns = await getKBPatterns()
-      const results = await processRun(devices, kbPatterns)
-      const run = {
-        id: runId,
-        name: runName || `Run ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-        status: "completed" as const,
-        createdAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        devices,
-        results,
-        feedbackSubmitted: false,
+      const payload = {
+        devices: devices.map((d) => ({
+          id: d.id,
+          brand: "",
+          model: d.model,
+          storage_gb: d.storage,
+          ram_gb: d.ram,
+          network_type: "4G",
+          condition_tier: d.condition,
+          warranty_months: "0",
+        })),
       }
-      
-      await saveRun(run)
-      router.push(`/runs/${run.id}`)
-    } catch (apiError: any) {
-      setCsvError(apiError.message || "An error occurred while generating recommendations.")
+      const { job_id, live_urls } = await startAnalyzeDevices(payload)
+      setAnalyzeJobId(job_id)
+      setLiveUrls(live_urls ?? [])
+    } catch (apiError: unknown) {
+      setCsvError(apiError instanceof Error ? apiError.message : "Failed to start analysis.")
       setProcessing(false)
       setJobId(null)
     }
   }
+
+  const pollAnalyzeStatus = useCallback(async (aid: string) => {
+    try {
+      const data = await getAnalyzeDevicesStatus(aid)
+      if (data.status === "finished" && data.results) {
+        const results = mapAnalyzeResultsToPricingResults(data.results)
+        const run = {
+          id: jobId!,
+          name: runName || `Run ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+          status: "completed" as const,
+          createdAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          devices,
+          results,
+          scrapeResults: data.scrape_results ?? null,
+          feedbackSubmitted: false,
+        }
+        await saveRun(run)
+        setLastScrapeResults(data.scrape_results ?? null)
+        setCompletedRunId(run.id)
+        setProcessing(false)
+        setAnalyzeJobId(null)
+        setLiveUrls([])
+        return
+      }
+      if (data.status === "error") {
+        setCsvError(data.error ?? "Analysis failed.")
+        setProcessing(false)
+        setAnalyzeJobId(null)
+        setLiveUrls([])
+        return
+      }
+      setTimeout(() => pollAnalyzeStatus(aid), POLL_INTERVAL_MS)
+    } catch (e) {
+      setCsvError(e instanceof Error ? e.message : "Failed to fetch status.")
+      setProcessing(false)
+      setAnalyzeJobId(null)
+      setLiveUrls([])
+    }
+  }, [devices, jobId, runName])
+
+  useEffect(() => {
+    if (analyzeJobId && processing) {
+      pollAnalyzeStatus(analyzeJobId)
+    }
+  }, [analyzeJobId, processing, pollAnalyzeStatus])
 
   const isValid = devices.every(d => d.storage && d.model && d.ram && d.color)
 
@@ -353,6 +411,106 @@ export default function NewRunPage() {
             </span>
           </div>
         </div>
+
+        {/* Live session iframes: show while job is running */}
+        {liveUrls.length > 0 && processing && (
+          <div className="mt-6 rounded-lg border border-border overflow-hidden">
+            <p className="text-xs font-medium text-muted-foreground px-3 py-2 bg-muted/50">
+              Live browser sessions — watch the scrape in progress. If the frame is blank, use &quot;Open in new tab&quot;.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3">
+              {liveUrls.map((url, i) => {
+                const sourceLabels = ["Ovantica", "ReFit Global", "Cashify"]
+                const label = sourceLabels[i] ?? `Session ${i + 1}`
+                return (
+                  <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
+                    <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 font-medium truncate" title={url}>
+                      {label}
+                    </p>
+                    <iframe
+                      src={url}
+                      title={`Live scrape: ${label}`}
+                      className="w-full h-[280px] min-h-[200px] border-0 bg-background"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      allow="fullscreen"
+                    />
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
+                    >
+                      Open in new tab <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* After completion: 3 tables by source (under device section) */}
+        {lastScrapeResults && !processing && (
+          <div className="mt-6 space-y-6">
+            {completedRunId && (
+              <div className="flex items-center gap-2 text-sm text-primary">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Run complete.</span>
+                <Link href={`/runs/${completedRunId}`} className="font-medium underline">
+                  View run
+                </Link>
+              </div>
+            )}
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Scraped data by source
+            </p>
+            {[
+              { key: "ovantica", label: "Ovantica" },
+              { key: "refitglobal", label: "ReFit Global" },
+              { key: "cashify", label: "Cashify" },
+            ].map(({ key, label }) => {
+              const rows = lastScrapeResults[key] ?? []
+              return (
+                <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
+                  <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                    <p className="text-sm font-medium text-foreground">{label}</p>
+                    <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    {rows.length > 0 ? (
+                      <table className="w-full text-xs min-w-[320px]">
+                        <thead>
+                          <tr className="bg-muted/30 border-b border-border">
+                            <th className="text-left py-2 px-3 font-medium">Storage</th>
+                            <th className="text-left py-2 px-3 font-medium">Model</th>
+                            <th className="text-left py-2 px-3 font-medium">RAM</th>
+                            <th className="text-left py-2 px-3 font-medium">Color</th>
+                            <th className="text-left py-2 px-3 font-medium">Condition</th>
+                            <th className="text-left py-2 px-3 font-medium">Price</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((row, i) => (
+                            <tr key={i} className="border-b border-border last:border-0">
+                              <td className="py-2 px-3">{row.Storage ?? "—"}</td>
+                              <td className="py-2 px-3">{row.Model ?? "—"}</td>
+                              <td className="py-2 px-3">{row.Ram ?? "—"}</td>
+                              <td className="py-2 px-3">{row.Color ?? "—"}</td>
+                              <td className="py-2 px-3">{row.Condition ?? "—"}</td>
+                              <td className="py-2 px-3">{row.Price ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="text-xs text-muted-foreground px-3 py-4">No listings from this source.</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </AppShell>
   )

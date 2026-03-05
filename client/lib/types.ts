@@ -58,6 +58,8 @@ export interface Run {
   completedAt?: string
   devices: DeviceInput[]
   results: PricingResult[]
+  /** Per-source scrape tables (ovantica, refitglobal, cashify -> list of rows). Stored in DB, shown on run detail. */
+  scrapeResults?: Record<string, BrowserScrapeRow[]> | null
   feedbackSubmitted: boolean
 }
 
@@ -105,12 +107,46 @@ export interface ScrapedDeviceItem {
   image?: string | null
 }
 
+/** Per-row shape from browser scrape (per source). */
+export interface BrowserScrapeRow {
+  Storage?: string
+  Model?: string
+  Ram?: string
+  Color?: string
+  Condition?: string
+  Price?: string
+}
+
 export interface ScrapeResultsResponse {
   job_id: string
   status: "running" | "finished" | "error"
   query?: string
   error?: string
-  results?: Record<string, unknown[]>
+  /** Per-source results: ovantica, refitglobal, cashify -> list of rows */
+  results?: Record<string, BrowserScrapeRow[]>
   devices?: ScrapedDeviceItem[]
   count?: number
+}
+
+// Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
+export interface AnalyzeDevicesStartResponse {
+  job_id: string
+  live_urls: string[]
+}
+
+export interface AnalyzeDevicesStatusResponse {
+  job_id: string
+  status: "running" | "finished" | "error"
+  live_urls?: string[]
+  error?: string
+  results?: Array<{
+    id: string
+    predicted_price?: string
+    explanation?: string
+    risk_flags?: string[]
+    data_found_in?: string[]
+    source_url?: string
+    source_urls?: Array<{ source: string; url: string }>
+  }>
+  scrape_results?: Record<string, BrowserScrapeRow[]>
 }

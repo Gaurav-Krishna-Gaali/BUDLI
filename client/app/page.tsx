@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
 import {
   UploadCloud, History, BookOpen, BarChart2,
@@ -37,6 +37,7 @@ export default function DashboardPage() {
   const [scrapeResult, setScrapeResult] = useState<ScrapeResultsResponse | null>(null)
   const [scrapeError, setScrapeError] = useState<string | null>(null)
   const [liveUrls, setLiveUrls] = useState<string[]>([])
+  const scrapeInFlightRef = useRef(false)
 
   useEffect(() => {
     getRuns().then(setRuns)
@@ -75,6 +76,9 @@ export default function DashboardPage() {
   const handleStartScrape = async () => {
     const query = scrapeQuery.trim()
     if (!query) return
+    // Prevent double-submit so only 3 browser sessions are created per run (not 6)
+    if (scrapeInFlightRef.current || scrapeStatus === "starting" || scrapeStatus === "running") return
+    scrapeInFlightRef.current = true
     setScrapeError(null)
     setScrapeResult(null)
     setScrapeStatus("starting")
@@ -86,6 +90,8 @@ export default function DashboardPage() {
     } catch (e) {
       setScrapeStatus("error")
       setScrapeError(e instanceof Error ? e.message : "Failed to start scrape")
+    } finally {
+      scrapeInFlightRef.current = false
     }
   }
 
@@ -276,35 +282,39 @@ export default function DashboardPage() {
                 </Button>
               )}
             </div>
-            {/* Live session iframes: show while job is running, hide when we have results */}
+            {/* Live session iframes: show while job is running */}
             {liveUrls.length > 0 && scrapeStatus === "running" && (
               <div className="mb-4">
                 <p className="text-xs font-medium text-muted-foreground mb-2">
                   Live browser session(s) — watch until results are ready. If the frame is blank, use &quot;Open in new tab&quot; (the session may block embedding).
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {liveUrls.map((url, i) => (
-                    <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
-                      <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 truncate" title={url}>
-                        Session {i + 1}
-                      </p>
-                      <iframe
-                        src={url}
-                        title={`Live scrape session ${i + 1}`}
-                        className="w-full h-[320px] min-h-[240px] border-0 bg-background"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                        allow="fullscreen"
-                      />
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
-                      >
-                        Open in new tab <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  ))}
+                  {liveUrls.map((url, i) => {
+                    const sourceLabels = ["Ovantica", "ReFit Global", "Cashify"]
+                    const label = sourceLabels[i] ?? `Session ${i + 1}`
+                    return (
+                      <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
+                        <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 truncate font-medium" title={url}>
+                          {label}
+                        </p>
+                        <iframe
+                          src={url}
+                          title={`Live scrape: ${label}`}
+                          className="w-full h-[320px] min-h-[240px] border-0 bg-background"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                          allow="fullscreen"
+                        />
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
+                        >
+                          Open in new tab <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -314,37 +324,61 @@ export default function DashboardPage() {
                 {scrapeError}
               </div>
             )}
-            {scrapeStatus === "finished" && scrapeResult?.devices && scrapeResult.devices.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                  Results ({scrapeResult.count ?? scrapeResult.devices.length} devices)
+            {/* When finished: show 3 tables, one per source (Ovantica, ReFit Global, Cashify) */}
+            {scrapeStatus === "finished" && scrapeResult?.results && (
+              <div className="space-y-6">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Results by source ({scrapeResult.count ?? 0} total devices)
                 </p>
-                <div className="border border-border rounded-md overflow-x-auto">
-                  <table className="w-full text-xs min-w-[320px]">
-                    <thead>
-                      <tr className="bg-muted/50 border-b border-border">
-                        <th className="text-left py-2 px-3 font-medium">Name</th>
-                        <th className="text-left py-2 px-3 font-medium">Price</th>
-                        <th className="text-left py-2 px-3 font-medium">Source</th>
-                        <th className="text-left py-2 px-3 font-medium">Storage</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {scrapeResult.devices.map((d, i) => (
-                        <tr key={i} className="border-b border-border last:border-0">
-                          <td className="py-2 px-3">{d.name ?? "—"}</td>
-                          <td className="py-2 px-3">{d.price ?? "—"}</td>
-                          <td className="py-2 px-3">{d.source ?? "—"}</td>
-                          <td className="py-2 px-3">{d.storage ?? "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {[
+                  { key: "ovantica", label: "Ovantica" },
+                  { key: "refitglobal", label: "ReFit Global" },
+                  { key: "cashify", label: "Cashify" },
+                ].map(({ key, label }) => {
+                  const rows = scrapeResult.results?.[key] ?? []
+                  return (
+                    <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
+                      <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                        <p className="text-sm font-medium text-foreground">{label}</p>
+                        <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
+                      </div>
+                      <div className="overflow-x-auto">
+                        {rows.length > 0 ? (
+                          <table className="w-full text-xs min-w-[320px]">
+                            <thead>
+                              <tr className="bg-muted/30 border-b border-border">
+                                <th className="text-left py-2 px-3 font-medium">Storage</th>
+                                <th className="text-left py-2 px-3 font-medium">Model</th>
+                                <th className="text-left py-2 px-3 font-medium">RAM</th>
+                                <th className="text-left py-2 px-3 font-medium">Color</th>
+                                <th className="text-left py-2 px-3 font-medium">Condition</th>
+                                <th className="text-left py-2 px-3 font-medium">Price</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map((row, i) => (
+                                <tr key={i} className="border-b border-border last:border-0">
+                                  <td className="py-2 px-3">{row.Storage ?? "—"}</td>
+                                  <td className="py-2 px-3">{row.Model ?? "—"}</td>
+                                  <td className="py-2 px-3">{row.Ram ?? "—"}</td>
+                                  <td className="py-2 px-3">{row.Color ?? "—"}</td>
+                                  <td className="py-2 px-3">{row.Condition ?? "—"}</td>
+                                  <td className="py-2 px-3">{row.Price ?? "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <p className="text-xs text-muted-foreground px-3 py-4">No listings from this source.</p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
-            {scrapeStatus === "finished" && scrapeResult?.devices?.length === 0 && (
-              <p className="text-xs text-muted-foreground">No devices returned from scrape.</p>
+            {scrapeStatus === "finished" && !scrapeResult?.results && (
+              <p className="text-xs text-muted-foreground">No results returned from scrape.</p>
             )}
           </div>
         </div>

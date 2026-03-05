@@ -6,6 +6,8 @@ import type {
   KBPattern,
   ScrapeStartResponse,
   ScrapeResultsResponse,
+  AnalyzeDevicesStartResponse,
+  AnalyzeDevicesStatusResponse,
 } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -32,6 +34,32 @@ export async function getScrapeResults(jobId: string): Promise<ScrapeResultsResp
   if (!res.ok) {
     if (res.status === 404) throw new Error("Job not found")
     throw new Error(res.statusText || "Failed to get results")
+  }
+  return res.json()
+}
+
+// -------------------------------------------------------------------
+// Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
+// -------------------------------------------------------------------
+
+export async function startAnalyzeDevices(payload: { devices: Array<{ id: string; brand: string; model: string; storage_gb: string; ram_gb: string; network_type: string; condition_tier: string; warranty_months: string }> }): Promise<AnalyzeDevicesStartResponse> {
+  const res = await fetch(`${API_BASE_URL}/analyze-devices/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || res.statusText || "Failed to start analyze-devices")
+  }
+  return res.json()
+}
+
+export async function getAnalyzeDevicesStatus(jobId: string): Promise<AnalyzeDevicesStatusResponse> {
+  const res = await fetch(`${API_BASE_URL}/analyze-devices/status/${jobId}`)
+  if (!res.ok) {
+    if (res.status === 404) throw new Error("Job not found")
+    throw new Error(res.statusText || "Failed to get status")
   }
   return res.json()
 }
@@ -440,4 +468,59 @@ export async function processRun(
     // Fallback or re-throw
     throw error;
   }
+}
+
+/** Map analyze-devices status response results to PricingResult[] (for async flow). */
+export function mapAnalyzeResultsToPricingResults(
+  results: Array<{
+    id: string
+    predicted_price?: string
+    explanation?: string
+    risk_flags?: string[]
+    data_found_in?: string[]
+    source_url?: string
+    source_urls?: Array<{ source: string; url: string }>
+  }>
+): PricingResult[] {
+  return results.map((r) => {
+    const rec = parseInt(r.predicted_price || "0") || 0;
+    const low = Math.round((rec * 0.92) / 100) * 100;
+    const high = Math.round((rec * 1.08) / 100) * 100;
+    const marketSignals: MarketSignal[] =
+      r.source_urls && Array.isArray(r.source_urls) && r.source_urls.length > 0
+        ? r.source_urls.map((s) => ({
+            source:
+              s.source === "refitglobal"
+                ? "ReFit Global (Search)"
+                : s.source === "cashify"
+                  ? "Cashify (Search)"
+                  : "Ovantica (Search)",
+            price: rec,
+            condition: "Scraped Search Query",
+            url: s.url,
+            scrapedAt: new Date().toISOString(),
+          }))
+        : r.source_url
+          ? [
+              {
+                source: "Ovantica (Search)",
+                price: rec,
+                condition: "Scraped Search Query",
+                url: r.source_url,
+                scrapedAt: new Date().toISOString(),
+              },
+            ]
+          : [];
+    return {
+      deviceId: r.id,
+      recommendedPrice: rec,
+      priceLow: low,
+      priceHigh: high,
+      dataFoundIn: r.data_found_in ?? [],
+      pricingExplanation: r.explanation || "No explanation provided.",
+      riskFlags: r.risk_flags || [],
+      marketSignals,
+      sourceUrl: r.source_url,
+    };
+  });
 }
