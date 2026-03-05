@@ -157,20 +157,20 @@ async def _run_single_browser(client: Any, prompt: str, session_id: str) -> Any:
     return result.output
 
 
-async def _run_browser_scrape(job_id: str, prompts: list[str], session_ids: list[str]) -> None:
-    client = _get_browser_use_client()
-    if not client:
-        _browser_scrape_jobs[job_id]["status"] = "error"
-        _browser_scrape_jobs[job_id]["error"] = "BrowserUse client not available"
-        return
+_BROWSER_SOURCES = ["ovantica", "refitglobal", "cashify"]
+
+
+async def _run_browser_scrape_tasks(
+    client: Any, prompts: list[str], session_ids: list[str]
+) -> dict[str, list[BrowserScrapeDevice]]:
+    """Run browser scrape for all sources; returns dict source -> list[BrowserScrapeDevice]."""
     tasks = [
         asyncio.create_task(_run_single_browser(client, prompt, sid))
         for prompt, sid in zip(prompts, session_ids)
     ]
     results_list = await asyncio.gather(*tasks, return_exceptions=True)
-    sources = ["ovantica", "refitglobal", "cashify"]
     results: dict[str, list[BrowserScrapeDevice]] = {}
-    for source, result in zip(sources, results_list):
+    for source, result in zip(_BROWSER_SOURCES, results_list):
         if isinstance(result, Exception):
             logger.warning("Browser scrape %s failed: %s", source, result)
             results[source] = []
@@ -180,8 +180,48 @@ async def _run_browser_scrape(job_id: str, prompts: list[str], session_ids: list
                 x if isinstance(x, BrowserScrapeDevice) else BrowserScrapeDevice(**(x or {}))
                 for x in raw
             ]
+    return results
+
+
+async def _run_browser_scrape(job_id: str, prompts: list[str], session_ids: list[str]) -> None:
+    client = _get_browser_use_client()
+    if not client:
+        _browser_scrape_jobs[job_id]["status"] = "error"
+        _browser_scrape_jobs[job_id]["error"] = "BrowserUse client not available"
+        return
+    results = await _run_browser_scrape_tasks(client, prompts, session_ids)
     _browser_scrape_jobs[job_id]["results"] = results
     _browser_scrape_jobs[job_id]["status"] = "finished"
+
+
+async def _scrape_with_browser(query: str) -> tuple[list[dict], list[dict]]:
+    """
+    Run browser-based scrape for all three sources (Ovantica, ReFit, Cashify).
+    Returns (devices, source_urls) in the same shape as _scrape_all_sources for feeding into Bedrock.
+    Returns ([], []) if BrowserUse client is not available.
+    """
+    client = _get_browser_use_client()
+    if not client:
+        return [], []
+
+    prompts = _browser_prompts_for_query(query)
+    try:
+        sessions = [await client.sessions.create() for _ in prompts]
+    except Exception as e:
+        logger.warning("Browser session create failed: %s", e)
+        return [], []
+
+    session_ids = [s.id for s in sessions]
+    results = await _run_browser_scrape_tasks(client, prompts, session_ids)
+    devices = _browser_results_to_devices(results)
+    device_dicts = [d.model_dump() for d in devices]
+    encoded = urllib.parse.quote_plus(query)
+    source_urls = [
+        {"source": "ovantica", "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(query)}"},
+        {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={encoded}"},
+        {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={encoded}"},
+    ]
+    return device_dicts, source_urls
 
 
 class AnalyzeRequest(BaseModel):
@@ -226,6 +266,7 @@ def health() -> dict[str, Any]:
 
 @app.post("/scrape", response_model=ScrapeResponse)
 def scrape(req: ScrapeRequest) -> ScrapeResponse:
+    """Quick sync scrape (script-based, Ovantica only). For full browser scrape use POST /scrape/start."""
     try:
         devices = scrape_device_data(req.query)
     except Exception as e:
@@ -282,15 +323,24 @@ async def scrape_results(job_id: str) -> dict[str, Any]:
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
+    """Scrape via browser (when BROWSER_USE_API_KEY set), else script; then run Bedrock analysis."""
+    devices_dicts: list[dict] = []
     try:
-        devices = scrape_device_data(req.query)
+        devices_dicts, _ = await _scrape_with_browser(req.query)
+        if not devices_dicts:
+            # Fallback: script-based (Ovantica only)
+            raw = scrape_device_data(req.query)
+            for d in raw:
+                d = dict(d)
+                d.setdefault("source", "ovantica")
+                devices_dicts.append(d)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Scrape failed: {e}") from e
 
     try:
         analysis = analyze_with_bedrock(
-            devices=devices,
+            devices=devices_dicts,
             query=req.query,
             instructions=req.instructions,
             model_id=req.model_id,
@@ -301,6 +351,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Bedrock analysis failed: {e}") from e
 
+    devices = [Device(**{k: v for k, v in d.items() if k in Device.model_fields}) for d in devices_dicts]
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
 
 
@@ -425,7 +476,7 @@ def _scrape_all_sources(search_query: str) -> tuple[list[dict], list[dict]]:
     return devices, source_urls
 
 
-def _run_bedrock_analysis(
+async def _run_bedrock_analysis(
     idx: int,
     brand: str,
     model: str,
@@ -459,7 +510,9 @@ def _run_bedrock_analysis(
     )
 
     try:
-        scraped_devices, source_urls = _scrape_all_sources(search_query)
+        scraped_devices, source_urls = await _scrape_with_browser(search_query)
+        if not scraped_devices:
+            scraped_devices, source_urls = _scrape_all_sources(search_query)
         ovantica_count = sum(1 for d in scraped_devices if d.get("source") == "ovantica")
         refit_count = sum(1 for d in scraped_devices if d.get("source") == "refitglobal")
         cashify_count = sum(1 for d in scraped_devices if d.get("source") == "cashify")
@@ -667,7 +720,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls, _trends = _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls, _trends = await _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -692,10 +745,10 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
     )
 
 @app.post("/analyze-devices", response_model=AnalyzeDevicesResponse)
-def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
+async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, confidence_score, source_url, source_urls, trends = _run_bedrock_analysis(
+        price, vel, explanation, flags, confidence_score, source_url, source_urls, trends = await _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
