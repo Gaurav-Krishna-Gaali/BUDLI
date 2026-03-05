@@ -41,7 +41,7 @@ export default function RunResultsPage() {
   if (!run) {
     return (
       <AppShell>
-        <div className="p-8 text-center text-muted-foreground">Run not found.</div>
+        <div className="p-4 sm:p-8 text-center text-muted-foreground">Run not found.</div>
       </AppShell>
     )
   }
@@ -104,15 +104,15 @@ export default function RunResultsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Header */}
-        <div className="flex items-start justify-between mb-8">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 sm:mb-8">
+          <div className="min-w-0">
             <Link href="/history" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-2 transition-colors">
-              <ArrowLeft className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
               Back to History
             </Link>
-            <h1 className="text-2xl font-bold text-balance">{run.name}</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-balance wrap-break-word">{run.name}</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
               {run.devices.length} device{run.devices.length !== 1 ? "s" : ""} &bull; {new Date(run.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
               {run.feedbackSubmitted && (
@@ -123,7 +123,7 @@ export default function RunResultsPage() {
               )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             {!run.feedbackSubmitted && !feedbackMode && (
               <Button
                 variant="outline"
@@ -142,7 +142,7 @@ export default function RunResultsPage() {
         </div>
 
         {/* Summary strip */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
           {[
             { label: "Devices", value: run.devices.length },
             { label: "Avg Price", value: formatINR(Math.round(localResults.reduce((s, r) => s + r.recommendedPrice, 0) / localResults.length)) },
@@ -173,9 +173,9 @@ export default function RunResultsPage() {
             return (
               <div key={device.id} className="bg-card border border-border rounded-lg overflow-hidden">
                 {/* Row summary */}
-                <div className="flex items-center gap-4 px-5 py-4">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-foreground">
+                <div className="flex flex-wrap items-center gap-3 sm:gap-4 px-4 sm:px-5 py-4">
+                  <div className="flex-1 min-w-0 order-1">
+                    <p className="font-semibold text-foreground wrap-break-word">
                       {device.model}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -184,7 +184,7 @@ export default function RunResultsPage() {
                   </div>
 
                   {/* Price */}
-                  <div className="text-right shrink-0 w-36">
+                  <div className="text-left sm:text-right shrink-0 w-full sm:w-36 order-2 sm:order-0">
                     <p className="text-lg font-bold text-primary">{formatINR(result.recommendedPrice)}</p>
                     <p className="text-xs text-muted-foreground">
                       {formatINR(result.priceLow)} – {formatINR(result.priceHigh)}
@@ -192,28 +192,26 @@ export default function RunResultsPage() {
                   </div>
 
                   {/* Velocity */}
-                  <div className="shrink-0 w-24 text-center">
+                  <div className="shrink-0 w-24 order-3">
                     <VelocityBadge velocity={result.velocityCategory} />
                     <p className="text-xs text-muted-foreground mt-1">~{result.velocityDaysEstimate}d</p>
                   </div>
 
-                  {/* Confidence */}
-                  <div className="shrink-0">
+                  {/* Confidence + Expand */}
+                  <div className="flex items-center gap-2 shrink-0 order-4 ml-auto sm:ml-0">
                     <ConfidenceRing score={result.confidenceScore} />
+                    <button
+                      onClick={() => toggleExpand(device.id)}
+                      className="text-muted-foreground hover:text-foreground transition-colors p-1"
+                    >
+                      {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
                   </div>
-
-                  {/* Expand */}
-                  <button
-                    onClick={() => toggleExpand(device.id)}
-                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors ml-1"
-                  >
-                    {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  </button>
                 </div>
 
                 {/* Expanded detail */}
                 {isOpen && (
-                  <div className="border-t border-border px-5 py-5 space-y-5">
+                  <div className="border-t border-border px-4 sm:px-5 py-4 sm:py-5 space-y-5">
                     {/* Market signals */}
                     {result.marketSignals.length > 0 && (
                       <div>
@@ -347,7 +345,7 @@ export default function RunResultsPage() {
 
         {/* Submit feedback */}
         {feedbackMode && (
-          <div className="mt-6 flex items-center gap-3 border-t border-border pt-6">
+          <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3 border-t border-border pt-6">
             <Button
               onClick={submitFeedback}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
@@ -361,7 +359,7 @@ export default function RunResultsPage() {
             >
               Cancel
             </button>
-            <span className="text-xs text-muted-foreground ml-auto">
+            <span className="text-xs text-muted-foreground sm:ml-auto">
               Feedback is stored locally and informs future pricing runs
             </span>
           </div>

@@ -77,9 +77,9 @@ export default function AnalyticsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-balance">Analytics</h1>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-balance">Analytics</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Aggregate insights across all pricing runs and knowledge base entries.
           </p>
@@ -154,10 +154,11 @@ export default function AnalyticsPage() {
             {/* Brand breakdown */}
             {brandStats.length > 0 && (
               <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="px-5 py-4 border-b border-border">
+                <div className="px-4 sm:px-5 py-4 border-b border-border">
                   <h3 className="text-sm font-semibold">Model breakdown</h3>
                 </div>
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[400px]">
                   <thead>
                     <tr className="border-b border-border">
                       {["Model", "Devices", "Avg Price", "Avg Confidence", "Fast Movers"].map(h => (
@@ -192,6 +193,7 @@ export default function AnalyticsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
 

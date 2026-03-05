@@ -27,9 +27,9 @@ export default function KnowledgeBasePage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-balance">Knowledge Base</h1>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-balance">Knowledge Base</h1>
           <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
             Historical human review decisions. Patterns here are used to improve future pricing recommendations.
           </p>
@@ -75,8 +75,8 @@ export default function KnowledgeBasePage() {
               <h2 className="text-sm font-semibold text-foreground">Review History</h2>
               <span className="text-xs text-muted-foreground">{entries.length} entr{entries.length !== 1 ? "ies" : "y"}</span>
             </div>
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-card border border-border rounded-lg overflow-x-auto">
+              <table className="w-full text-sm min-w-[500px]">
                 <thead>
                   <tr className="border-b border-border">
                     {["Device", "Condition", "Recommended", "Approved", "Delta", "Velocity", "Date"].map(h => (

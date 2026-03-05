@@ -147,10 +147,10 @@ export default function NewRunPage() {
 
   return (
     <AppShell>
-      <div className="max-w-4xl mx-auto px-8 py-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-foreground text-balance">New Pricing Run</h1>
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground text-balance">New Pricing Run</h1>
           <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
             Upload a CSV or enter up to 10 device models. The engine will generate pricing recommendations,
             velocity estimates, and explanations.
@@ -165,7 +165,7 @@ export default function NewRunPage() {
             placeholder="e.g. Weekly iPhone Batch – Jan 2025"
             value={runName}
             onChange={e => setRunName(e.target.value)}
-            className="max-w-sm"
+            className="w-full sm:max-w-sm"
           />
         </div>
 
@@ -314,7 +314,7 @@ export default function NewRunPage() {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <Button
             onClick={handleSubmit}
             disabled={!isValid || processing}

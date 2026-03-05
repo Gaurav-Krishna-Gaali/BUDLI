@@ -108,15 +108,15 @@ export default function DashboardPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Hero */}
-        <div className="mb-10">
-          <div className="flex items-start justify-between">
-            <div>
+        <div className="mb-8 sm:mb-10">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="min-w-0">
               <p className="text-xs font-semibold text-primary uppercase tracking-widest mb-2">
                 AI-Assisted Pricing POC
               </p>
-              <h1 className="text-3xl font-bold text-balance leading-tight mb-3">
+              <h1 className="text-2xl sm:text-3xl font-bold text-balance leading-tight mb-3">
                 ReCommerce Pricing<br />Intelligence Platform
               </h1>
               <p className="text-muted-foreground text-sm leading-relaxed max-w-lg">
@@ -127,16 +127,16 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 mt-6">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-4 sm:mt-6">
             <Link href="/new-run">
-              <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
-                <UploadCloud className="w-4 h-4 mr-2" />
+              <Button className="bg-primary text-primary-foreground hover:bg-primary/90 w-full sm:w-auto">
+                <UploadCloud className="w-4 h-4 mr-2 shrink-0" />
                 Start New Run
               </Button>
             </Link>
-            <Link href="/history">
-              <Button variant="outline">
-                <History className="w-4 h-4 mr-2" />
+            <Link href="/history" className="w-full sm:w-auto">
+              <Button variant="outline" className="w-full sm:w-auto">
+                <History className="w-4 h-4 mr-2 shrink-0" />
                 View History
               </Button>
             </Link>
@@ -144,7 +144,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-8 sm:mb-10">
           {[
             { label: "Total Runs", value: runs.length || "—", sub: "pricing analyses" },
             { label: "Devices Priced", value: runs.flatMap(r => r.devices).length || "—", sub: "across all runs" },
@@ -159,7 +159,7 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        <div className="grid md:grid-cols-2 gap-8 mb-10">
+        <div className="grid md:grid-cols-2 gap-6 sm:gap-8 mb-8 sm:mb-10">
           {/* Recent runs */}
           <div>
             <div className="flex items-center justify-between mb-4">
@@ -238,18 +238,18 @@ export default function DashboardPage() {
         </div>
 
         {/* Live price search (browser scrape) */}
-        <div className="mb-10">
+        <div className="mb-8 sm:mb-10">
           <h2 className="text-sm font-semibold text-foreground mb-4">Live price search (browser scrape)</h2>
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-4 sm:p-5">
             <p className="text-xs text-muted-foreground mb-4">
               Start a browser-based scrape across Ovantica, ReFit Global, and Cashify. Requires <code className="bg-muted px-1 rounded">BROWSER_USE_API_KEY</code> on the server.
             </p>
-            <div className="flex flex-wrap items-center gap-3 mb-4">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 mb-4">
               <Input
                 placeholder="e.g. Apple iPhone 15 Pro Max"
                 value={scrapeQuery}
                 onChange={(e) => setScrapeQuery(e.target.value)}
-                className="max-w-xs h-9 text-sm"
+                className="sm:max-w-xs h-9 text-sm w-full"
                 onKeyDown={(e) => e.key === "Enter" && handleStartScrape()}
               />
               <Button
@@ -323,8 +323,8 @@ export default function DashboardPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
                   Results ({scrapeResult.count ?? scrapeResult.devices.length} devices)
                 </p>
-                <div className="border border-border rounded-md overflow-hidden">
-                  <table className="w-full text-xs">
+                <div className="border border-border rounded-md overflow-x-auto">
+                  <table className="w-full text-xs min-w-[320px]">
                     <thead>
                       <tr className="bg-muted/50 border-b border-border">
                         <th className="text-left py-2 px-3 font-medium">Name</th>
@@ -356,7 +356,7 @@ export default function DashboardPage() {
         {/* Workflow */}
         <div>
           <h2 className="text-sm font-semibold text-foreground mb-4">How It Works</h2>
-          <div className="grid md:grid-cols-3 gap-3">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {WORKFLOW_STEPS.map((s, i) => (
               <div key={s.step} className="bg-card border border-border rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -370,7 +370,7 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          <div className="mt-4 bg-secondary/50 border border-border rounded-lg px-5 py-4 flex items-start gap-3">
+          <div className="mt-4 bg-secondary/50 border border-border rounded-lg px-4 sm:px-5 py-4 flex flex-col sm:flex-row items-start gap-3">
             <AlertCircle className="w-4 h-4 text-primary mt-0.5 shrink-0" />
             <p className="text-xs text-muted-foreground leading-relaxed">
               <span className="font-semibold text-foreground">Data sources:</span> Use &quot;Live price search&quot; above to scrape Ovantica, ReFit Global, and Cashify via the browser (requires <code className="bg-muted px-1 rounded">BROWSER_USE_API_KEY</code>). New runs use the same scrape + Bedrock flow and show source URLs and demand signals per device. All final pricing decisions remain with the pricing manager.
