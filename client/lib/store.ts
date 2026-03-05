@@ -119,7 +119,7 @@ export function parseCSV(text: string): Record<string, string>[] {
 
 export function generateOutputCSV(run: Run): string {
   const headers = [
-    "Storage", "Model", "Ram", "Color", "Condition", "Price",
+    "Storage", "Model", "Ram", "Color", "Condition",
     "recommended_price", "predicted_price", "price_high", "confidence",
     "velocity", "velocity_days",
     "explanation", "velocity_explanation", "risk_flags",
@@ -136,7 +136,6 @@ export function generateOutputCSV(run: Run): string {
       device.ram,
       device.color,
       device.condition,
-      device.price ?? "",
       result.recommendedPrice.toString(),
       result.priceLow.toString(),
       result.priceHigh.toString(),
@@ -159,11 +158,11 @@ export function generateOutputCSV(run: Run): string {
 }
 
 export function generateInputTemplateCSV(): string {
-  const headers = ["Storage", "Model", "Ram", "Color", "Condition", "Price"]
+  const headers = ["Storage", "Model", "Ram", "Color", "Condition"]
   const examples = [
-    ["128", "iPhone 16", "6", "Black", "good", "45000"],
-    ["64", "iPhone 12", "4", "Blue", "fair", "28000"],
-    ["128", "Galaxy S21", "8", "Phantom Black", "superb", "32000"],
+    ["128", "iPhone 16", "6", "Black", "good"],
+    ["64", "iPhone 12", "4", "Blue", "fair"],
+    ["128", "Galaxy S21", "8", "Phantom Black", "superb"],
   ]
   return [headers.join(","), ...examples.map(r => r.join(","))].join("\n")
 }

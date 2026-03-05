@@ -180,7 +180,6 @@ export default function RunResultsPage() {
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {device.storage}GB &bull; {device.ram}GB RAM &bull; {device.color} &bull; {device.condition}
-                      {device.price ? ` &bull; ₹${device.price}` : ""}
                     </p>
                   </div>
 

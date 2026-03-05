@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import asyncio
 import csv
@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 from models import RunModel, KnowledgeBaseEntryModel
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
@@ -83,7 +83,12 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
 
 class ScrapeRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="Search query, e.g. 'iphone 13'")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Search query, e.g. 'iphone 13'",
+    )
 
 
 class Device(BaseModel):
@@ -106,7 +111,7 @@ class ScrapeResponse(BaseModel):
     devices: list[Device]
 
 
-# --- BrowserUse scraper (from main.py) ---
+# --- BrowserUse scraper ---
 class BrowserScrapeDevice(BaseModel):
     """Schema returned by BrowserUse per device."""
     Storage: str = ""
@@ -225,7 +230,7 @@ async def _scrape_with_browser(query: str) -> tuple[list[dict], list[dict]]:
 
 
 class AnalyzeRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=500)
     instructions: Optional[str] = Field(
         default=None,
         description="Optional analysis instructions to guide the LLM.",
@@ -252,11 +257,6 @@ class AnalyzeResponse(BaseModel):
 class BedrockTestResponse(BaseModel):
     ok: bool
     analysis: str
-
-
-class CsvAnalyzeResponseMeta(BaseModel):
-    rows: int
-    failed_rows: int
 
 
 @app.get("/health")
@@ -355,15 +355,55 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
 
 
+ALLOWED_NETWORK_TYPES = ("5G", "4G", "3G")
+ALLOWED_CONDITION_TIERS = (
+    "superb", "fair", "good",
+    "Like New", "Excellent", "Good", "Fair",
+)
+WARRANTY_MONTHS_MIN = 0
+WARRANTY_MONTHS_MAX = 24
+ANALYZE_DEVICES_MAX_ITEMS = 50
+
+
 class AnalyzeDevicesRequestItem(BaseModel):
-    id: str
-    brand: str
-    model: str
-    storage_gb: str
-    ram_gb: str
-    network_type: str
-    condition_tier: str
-    warranty_months: str
+    id: str = Field(..., min_length=1, max_length=100)
+    brand: str = Field(..., max_length=100)
+    model: str = Field(..., min_length=1, max_length=200)
+    storage_gb: str = Field(..., min_length=1, max_length=20)
+    ram_gb: str = Field(..., min_length=1, max_length=20)
+    network_type: str = Field(..., max_length=10)
+    condition_tier: str = Field(..., min_length=1, max_length=20)
+    warranty_months: str = Field(..., max_length=5)
+
+    @field_validator("network_type")
+    @classmethod
+    def network_type_allowed(cls, v: str) -> str:
+        val = (v or "").strip()
+        if val and val not in ALLOWED_NETWORK_TYPES:
+            raise ValueError(f"network_type must be one of {ALLOWED_NETWORK_TYPES}")
+        return val or "4G"
+
+    @field_validator("condition_tier")
+    @classmethod
+    def condition_tier_allowed(cls, v: str) -> str:
+        val = (v or "").strip()
+        if not val:
+            raise ValueError("condition_tier is required")
+        if val not in ALLOWED_CONDITION_TIERS:
+            raise ValueError(f"condition_tier must be one of {ALLOWED_CONDITION_TIERS}")
+        return val
+
+    @field_validator("warranty_months")
+    @classmethod
+    def warranty_months_in_range(cls, v: str) -> str:
+        val = (v or "0").strip()
+        try:
+            n = int(val)
+        except ValueError:
+            raise ValueError("warranty_months must be a number")
+        if not (WARRANTY_MONTHS_MIN <= n <= WARRANTY_MONTHS_MAX):
+            raise ValueError(f"warranty_months must be between {WARRANTY_MONTHS_MIN} and {WARRANTY_MONTHS_MAX}")
+        return val
 
 class SourceUrl(BaseModel):
     source: str  # "ovantica" | "refitglobal" | "cashify"
@@ -393,7 +433,12 @@ class AnalyzeDevicesResponseItem(BaseModel):
     demand_signal: Optional[DemandSignal] = None
 
 class AnalyzeDevicesRequest(BaseModel):
-    devices: list[AnalyzeDevicesRequestItem]
+    devices: list[AnalyzeDevicesRequestItem] = Field(
+        ...,
+        min_length=1,
+        max_length=ANALYZE_DEVICES_MAX_ITEMS,
+        description="List of devices to analyze (1–50 items)",
+    )
 
 class AnalyzeDevicesResponse(BaseModel):
     results: list[AnalyzeDevicesResponseItem]

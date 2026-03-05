@@ -5,7 +5,7 @@ export type NetworkType = "5G" | "4G" | "3G"
 export type VelocityCategory = "Fast" | "Medium" | "Slow"
 export type RunStatus = "pending" | "processing" | "completed" | "error"
 
-/** Device input: Storage, Model, Ram, Color, Condition, Price (aligned with main.py) */
+/** Device input: Storage, Model, Ram, Color, Condition (aligned with main.py) */
 export interface DeviceInput {
   id: string
   storage: string
@@ -13,7 +13,6 @@ export interface DeviceInput {
   ram: string
   color: string
   condition: Condition
-  price?: string
 }
 
 export interface MarketSignal {

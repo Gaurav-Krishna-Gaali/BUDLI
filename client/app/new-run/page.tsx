@@ -83,7 +83,6 @@ export default function NewRunPage() {
             ram: row["Ram"] ?? row["ram"] ?? "",
             color: row["Color"] ?? row["color"] ?? "",
             condition: (cond === "superb" || cond === "fair" || cond === "good" ? cond : "good") as Condition,
-            price: row["Price"] ?? row["price"] ?? undefined,
           }
         })
         setDevices(mapped)
@@ -196,7 +195,7 @@ export default function NewRunPage() {
             >
               <UploadCloud className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
               <p className="text-sm font-medium text-foreground mb-1">Click to upload CSV</p>
-              <p className="text-xs text-muted-foreground">Up to 10 devices &bull; Storage, Model, Ram, Color, Condition (superb/fair/good), Price</p>
+              <p className="text-xs text-muted-foreground">Up to 10 devices &bull; Storage, Model, Ram, Color, Condition (superb/fair/good)</p>
               <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
             </div>
             <div className="flex items-center gap-3 mt-3">
@@ -290,15 +289,6 @@ export default function NewRunPage() {
                       {CONDITIONS.map(c => <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                </div>
-                <div>
-                  <Label className="text-xs mb-1 block">Price (optional)</Label>
-                  <Input
-                    placeholder="e.g. 45000"
-                    value={device.price ?? ""}
-                    onChange={e => updateDevice(device.id, "price", e.target.value)}
-                    className="h-8 text-xs"
-                  />
                 </div>
               </div>
             </div>
