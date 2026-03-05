@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 
 from bedrock_helper import analyze_with_bedrock
 from script import scrape_device_data, scrape_refit_data, scrape_cashify_data
-from trends_helper import fetch_trend_metrics
 
 # Optional BrowserUse SDK for /scrape/start + /scrape/results/{job_id}
 _browser_use_client: Any = None
@@ -410,17 +409,6 @@ class SourceUrl(BaseModel):
     url: str
 
 
-class DemandSignal(BaseModel):
-    demand_index: Optional[float] = None     # 0-1 composite score
-    demand_label: Optional[str] = None       # Very High / High / Medium / Low / Very Low
-    growth_rate: Optional[float] = None      # (recent - prev) / prev
-    acceleration: Optional[float] = None     # slope pts/week
-    direction: Optional[str] = None          # increasing / flat / decreasing
-    recent_4w_avg: Optional[float] = None    # mean of last 4 weeks (0-100)
-    prev_4w_avg: Optional[float] = None
-    latest: Optional[int] = None
-
-
 class AnalyzeDevicesResponseItem(BaseModel):
     id: str
     predicted_price: str
@@ -430,7 +418,6 @@ class AnalyzeDevicesResponseItem(BaseModel):
     confidence_score: Optional[int] = None
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
-    demand_signal: Optional[DemandSignal] = None
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem] = Field(
@@ -530,7 +517,7 @@ async def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str], Optional[int], str, list[dict], dict]:
+) -> tuple[Optional[str], Optional[str], Optional[str], list[str], Optional[int], str, list[dict]]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -565,36 +552,6 @@ async def _run_bedrock_analysis(
             "Row %d: scraped %d from Ovantica, %d from ReFit, %d from Cashify",
             idx, ovantica_count, refit_count, cashify_count,
         )
-
-        # Fetch Google Trends metrics and compute Demand Signal (best-effort, optional).
-        trends = fetch_trend_metrics(search_query)
-        if trends:
-            logger.info(
-                "Row %d: Demand Index=%.4f (%s) | growth_rate=%.4f | acceleration=%.4f | "
-                "recent_4w_avg=%.2f | direction=%s",
-                idx,
-                trends.get("demand_index", 0),
-                trends.get("demand_label", "?"),
-                trends.get("growth_rate", 0),
-                trends.get("acceleration", 0),
-                trends.get("recent_4w_avg", 0),
-                trends.get("direction"),
-            )
-            trends_summary = (
-                f"Demand Signal for '{search_query}' (Google Trends – last 12 months):\n"
-                f"  Demand Index (0-1):   {trends.get('demand_index')}  [{trends.get('demand_label')}]\n"
-                f"  Recent 4-week avg:    {trends.get('recent_4w_avg')} / 100\n"
-                f"  Prev  4-week avg:     {trends.get('prev_4w_avg')} / 100\n"
-                f"  Growth rate:          {'+' if (trends.get('growth_rate') or 0) >= 0 else ''}"
-                f"{round((trends.get('growth_rate') or 0) * 100, 1)}%\n"
-                f"  Trend acceleration:   {trends.get('acceleration')} pts/week slope\n"
-                f"  Direction:            {trends.get('direction')}\n"
-                f"  Latest data point:    {trends.get('latest')} / 100"
-            )
-        else:
-            trends = {}
-            trends_summary = "Demand Signal: Google Trends data unavailable."
-            logger.info("Row %d: no Google Trends data", idx)
     except Exception as e:
         logger.exception("Row %d: scrape failed: %s", idx, e)
         fallback_urls = [
@@ -602,7 +559,7 @@ async def _run_bedrock_analysis(
             {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}"},
             {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={urllib.parse.quote_plus(search_query)}"},
         ]
-        return "", "", "", [], fallback_urls[0]["url"], fallback_urls, {}
+        return "", "", "", [], None, fallback_urls[0]["url"], fallback_urls
 
     # Build a structured pricing prompt and ask for JSON.
     instructions = (
@@ -610,8 +567,7 @@ async def _run_bedrock_analysis(
         "You receive:\n"
         "- Device attributes (brand, model, storage, condition, warranty, RAM, network type)\n"
         "- External market signals from scraped listings (price, title, link, source) in JSON. "
-        "Sources include 'ovantica', 'refitglobal' (ReFit Global), and 'cashify'. Use all when available.\n"
-        "- Search demand signals from Google Trends (normalized 0-100 indices over the last 12 months).\n\n"
+        "Sources include 'ovantica', 'refitglobal' (ReFit Global), and 'cashify'. Use all when available.\n\n"
         "For the given device and signals, decide a competitive selling strategy.\n\n"
         "Return ONLY a JSON object with the following fields:\n\n"
         "1. recommended_price: number (in INR, no currency symbol, e.g. 28999)\n"
@@ -619,23 +575,17 @@ async def _run_bedrock_analysis(
         "3. explanation: string (2–4 sentences explaining the pricing decision)\n"
         "4. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Low demand\", \"Data sparse\"]).\n"
         "5. confidence_score: integer 0-100 reflecting how confident you are in this "
-        "recommendation given the scraped data quality, listing density, demand signal "
-        "availability, and price spread. Use 90-100 for abundant, consistent data; "
-        "70-89 for moderate data; 50-69 for sparse/conflicting data; below 50 for "
-        "very limited data.\n\n"
-        "Velocity classification guidelines (use Demand Index as your primary signal):\n"
-        "- Very Good: Demand Index >= 0.75 (Very High label) — strong momentum, positive growth, accelerating trend.\n"
-        "- Good:      Demand Index 0.55–0.74 (High label) — above-average momentum or positive growth rate.\n"
-        "- Neutral:   Demand Index 0.40–0.54 (Medium label) — stable demand, near-zero growth rate.\n"
-        "- Average:   Demand Index 0.25–0.39 (Low label) — below-average momentum or declining growth.\n"
-        "- Slow:      Demand Index < 0.25 (Very Low label) — weak momentum, negative growth, decelerating trend.\n"
-        "If Demand Signal is unavailable, fall back to scraped listing density and price spread.\n\n"
+        "recommendation given the scraped data quality, listing density, and price spread. "
+        "Use 90-100 for abundant, consistent data; 70-89 for moderate data; "
+        "50-69 for sparse/conflicting data; below 50 for very limited data.\n\n"
+        "Velocity: base it on scraped listing density, price spread, and how competitive the device is. "
+        "Use \"Very Good\" or \"Good\" for strong demand signals (many listings, tight spread); "
+        "\"Neutral\" or \"Average\" for moderate; \"Slow\" for sparse or wide-spread data.\n\n"
         "Pricing guidelines:\n"
         "- Start from the central tendency (median preferred) of scraped prices.\n"
         "- Adjust downward for worse condition or weaker warranty vs typical, upward for better.\n"
         "- For Very Good/Good velocity: price at or above market median to capture demand premium.\n"
         "- For Average/Slow velocity: price 5-10% below market median to accelerate inventory turnover.\n"
-        "- A positive growth_rate (>15%) warrants an upward price nudge even if overall Demand Index is medium.\n"
         "- Ensure recommended_price is not unreasonably far from both market average and lowest competitor unless clearly justified.\n"
     )
 
@@ -651,7 +601,7 @@ async def _run_bedrock_analysis(
                 }
                 for d in scraped_devices
             ],
-            query=query_string + "\n\n" + trends_summary,
+            query=query_string,
             instructions=instructions,
             model_id=None,
             region=None,
@@ -703,11 +653,11 @@ async def _run_bedrock_analysis(
             velocity = ""
 
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return predicted_price, velocity, explanation, risk_flags, confidence_score, primary_url, source_urls, trends
+        return predicted_price, velocity, explanation, risk_flags, confidence_score, primary_url, source_urls
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return "", "", "", [], None, primary_url, source_urls, {}
+        return "", "", "", [], None, primary_url, source_urls
 
 
 @app.post(
@@ -765,7 +715,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls, _trends = await _run_bedrock_analysis(
+        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls = await _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -793,7 +743,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, confidence_score, source_url, source_urls, trends = await _run_bedrock_analysis(
+        price, vel, explanation, flags, confidence_score, source_url, source_urls = await _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -803,16 +753,6 @@ async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             d.condition_tier,
             d.warranty_months,
         )
-        demand_signal = DemandSignal(
-            demand_index=trends.get("demand_index"),
-            demand_label=trends.get("demand_label"),
-            growth_rate=trends.get("growth_rate"),
-            acceleration=trends.get("acceleration"),
-            direction=trends.get("direction"),
-            recent_4w_avg=trends.get("recent_4w_avg"),
-            prev_4w_avg=trends.get("prev_4w_avg"),
-            latest=trends.get("latest"),
-        ) if trends else None
         results.append(AnalyzeDevicesResponseItem(
             id=d.id,
             predicted_price=price or "",
@@ -822,7 +762,6 @@ async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             confidence_score=confidence_score,
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
-            demand_signal=demand_signal,
         ))
         
     return AnalyzeDevicesResponse(results=results)

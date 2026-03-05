@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
   Download, CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  ArrowLeft, MessageSquare, Send, ExternalLink, Info, TrendingUp, TrendingDown, Minus
+  ArrowLeft, MessageSquare, Send, ExternalLink, Info
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -273,71 +273,6 @@ export default function RunResultsPage() {
                               {flag}
                             </div>
                           ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Demand Signal */}
-                    {result.demandSignal && result.demandSignal.demand_index != null && (
-                      <div>
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Demand Signal (Google Trends)</p>
-                        <div className="bg-muted/50 rounded-lg px-4 py-3">
-                          <div className="flex items-center gap-3 mb-3">
-                            {/* Demand Index bar */}
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs font-semibold text-foreground">
-                                  {result.demandSignal.demand_label ?? "—"}
-                                </span>
-                                <span className="text-xs font-bold text-primary">
-                                  {((result.demandSignal.demand_index ?? 0) * 100).toFixed(0)}<span className="text-muted-foreground font-normal">/100</span>
-                                </span>
-                              </div>
-                              <div className="w-full bg-border rounded-full h-1.5">
-                                <div
-                                  className="h-1.5 rounded-full bg-primary transition-all"
-                                  style={{ width: `${((result.demandSignal.demand_index ?? 0) * 100).toFixed(0)}%` }}
-                                />
-                              </div>
-                            </div>
-                            {/* Direction icon */}
-                            <div className="shrink-0">
-                              {result.demandSignal.direction === "increasing" ? (
-                                <TrendingUp className="w-4 h-4 text-green-500" />
-                              ) : result.demandSignal.direction === "decreasing" ? (
-                                <TrendingDown className="w-4 h-4 text-red-400" />
-                              ) : (
-                                <Minus className="w-4 h-4 text-muted-foreground" />
-                              )}
-                            </div>
-                          </div>
-                          {/* Stats row */}
-                          <div className="grid grid-cols-3 gap-2 text-[11px]">
-                            <div>
-                              <p className="text-muted-foreground">4-week avg</p>
-                              <p className="font-semibold text-foreground">{result.demandSignal.recent_4w_avg ?? "—"}<span className="text-muted-foreground">/100</span></p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">Growth rate</p>
-                              <p className={`font-semibold ${
-                                (result.demandSignal.growth_rate ?? 0) > 0.05 ? "text-green-600" :
-                                (result.demandSignal.growth_rate ?? 0) < -0.05 ? "text-red-500" : "text-foreground"
-                              }`}>
-                                {(result.demandSignal.growth_rate ?? 0) >= 0 ? "+" : ""}
-                                {(((result.demandSignal.growth_rate ?? 0)) * 100).toFixed(1)}%
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">Acceleration</p>
-                              <p className={`font-semibold ${
-                                (result.demandSignal.acceleration ?? 0) > 0.5 ? "text-green-600" :
-                                (result.demandSignal.acceleration ?? 0) < -0.5 ? "text-red-500" : "text-foreground"
-                              }`}>
-                                {(result.demandSignal.acceleration ?? 0) >= 0 ? "+" : ""}
-                                {(result.demandSignal.acceleration ?? 0).toFixed(2)} pts/wk
-                              </p>
-                            </div>
-                          </div>
                         </div>
                       </div>
                     )}

@@ -4,7 +4,6 @@ import type {
   MarketSignal,
   VelocityCategory,
   KBPattern,
-  DemandSignal,
   ScrapeStartResponse,
   ScrapeResultsResponse,
 } from "./types";
@@ -47,7 +46,6 @@ interface AnalyzeDevicesApiResult {
   confidence_score?: number | null
   source_url?: string
   source_urls?: Array<{ source: string; url: string }>
-  demand_signal?: import("./types").DemandSignal | null
 }
 
 // -------------------------------------------------------------------
@@ -448,7 +446,6 @@ export async function processRun(
         riskFlags: r.risk_flags || [],
         marketSignals,
         sourceUrl: r.source_url,
-        demandSignal: r.demand_signal as DemandSignal | undefined,
       };
     });
 

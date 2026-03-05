@@ -23,17 +23,6 @@ export interface MarketSignal {
   scrapedAt: string
 }
 
-export interface DemandSignal {
-  demand_index?: number       // 0-1 composite score
-  demand_label?: string       // Very High / High / Medium / Low / Very Low
-  growth_rate?: number        // (recent - prev) / prev
-  acceleration?: number       // slope pts/week
-  direction?: string          // increasing / flat / decreasing
-  recent_4w_avg?: number      // 0-100
-  prev_4w_avg?: number
-  latest?: number
-}
-
 export interface PricingResult {
   deviceId: string
   recommendedPrice: number
@@ -47,7 +36,6 @@ export interface PricingResult {
   riskFlags: string[]
   marketSignals: MarketSignal[]
   sourceUrl?: string
-  demandSignal?: DemandSignal   // Demand signal from Google Trends
   // Human review fields
   humanApprovedPrice?: number
   humanVelocityOverride?: VelocityCategory
