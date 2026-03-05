@@ -26,12 +26,13 @@ _browser_use_client: Any = None
 
 def _get_browser_use_client():
     global _browser_use_client
-    if _browser_use_client is None and os.environ.get("BROWSER_USE_API_KEY"):
+    api_key = os.environ.get("BROWSER_USE_API_KEY")
+    if _browser_use_client is None and api_key:
         try:
             from browser_use_sdk import AsyncBrowserUse  # type: ignore[import-untyped]
             _browser_use_client = AsyncBrowserUse()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("BrowserUse client init failed (check SDK install / serverless compatibility): %s", e)
     return _browser_use_client
 
 # In-memory job store for browser scrape jobs (per process)
