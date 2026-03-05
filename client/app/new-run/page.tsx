@@ -3,18 +3,19 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText, ExternalLink } from "lucide-react"
+import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText, ExternalLink, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
 import { saveRun, parseCSV, generateInputTemplateCSV, getKBPatterns } from "@/lib/store"
 import { startAnalyzeDevices, getAnalyzeDevicesStatus, mapAnalyzeResultsToPricingResults } from "@/lib/pricing-engine"
-import type { DeviceInput, Condition, BrowserScrapeRow } from "@/lib/types"
+import type { DeviceInput, Condition, BrowserScrapeRow, PricingResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const POLL_INTERVAL_MS = 2500
+const POLL_INTERVAL_MS = 15_000 // 15 seconds
 
 const CONDITIONS: Condition[] = ["superb", "fair", "good"]
 
@@ -39,9 +40,12 @@ export default function NewRunPage() {
   const [processing, setProcessing] = useState(false)
   const [activeTab, setActiveTab] = useState<"manual" | "csv">("manual")
   const [jobId, setJobId] = useState<string | null>(null)
-  const [liveUrls, setLiveUrls] = useState<string[]>([])
+  /** 3 live session URLs per device: [Ovantica, ReFit Global, Cashify] */
+  const [liveUrlsByDevice, setLiveUrlsByDevice] = useState<string[][]>([])
   const [analyzeJobId, setAnalyzeJobId] = useState<string | null>(null)
   const [lastScrapeResults, setLastScrapeResults] = useState<Record<string, BrowserScrapeRow[]> | null>(null)
+  /** Per-device pricing results when run completes (same order as devices) */
+  const [lastRunResults, setLastRunResults] = useState<PricingResult[] | null>(null)
   const [completedRunId, setCompletedRunId] = useState<string | null>(null)
 
   const addDevice = () => {
@@ -131,9 +135,10 @@ export default function NewRunPage() {
     setJobId(runId)
     setCsvError(null)
     setLastScrapeResults(null)
+    setLastRunResults(null)
     setCompletedRunId(null)
     setProcessing(true)
-    setLiveUrls([])
+    setLiveUrlsByDevice([])
     setAnalyzeJobId(null)
 
     try {
@@ -149,9 +154,9 @@ export default function NewRunPage() {
           warranty_months: "0",
         })),
       }
-      const { job_id, live_urls } = await startAnalyzeDevices(payload)
+      const { job_id, live_urls_by_device } = await startAnalyzeDevices(payload)
       setAnalyzeJobId(job_id)
-      setLiveUrls(live_urls ?? [])
+      setLiveUrlsByDevice(live_urls_by_device ?? [])
     } catch (apiError: unknown) {
       setCsvError(apiError instanceof Error ? apiError.message : "Failed to start analysis.")
       setProcessing(false)
@@ -177,17 +182,18 @@ export default function NewRunPage() {
         }
         await saveRun(run)
         setLastScrapeResults(data.scrape_results ?? null)
+        setLastRunResults(results)
         setCompletedRunId(run.id)
         setProcessing(false)
         setAnalyzeJobId(null)
-        setLiveUrls([])
+        setLiveUrlsByDevice([])
         return
       }
       if (data.status === "error") {
         setCsvError(data.error ?? "Analysis failed.")
         setProcessing(false)
         setAnalyzeJobId(null)
-        setLiveUrls([])
+        setLiveUrlsByDevice([])
         return
       }
       setTimeout(() => pollAnalyzeStatus(aid), POLL_INTERVAL_MS)
@@ -195,7 +201,7 @@ export default function NewRunPage() {
       setCsvError(e instanceof Error ? e.message : "Failed to fetch status.")
       setProcessing(false)
       setAnalyzeJobId(null)
-      setLiveUrls([])
+      setLiveUrlsByDevice([])
     }
   }, [devices, jobId, runName])
 
@@ -291,74 +297,201 @@ export default function NewRunPage() {
           </div>
         ) : null}
 
-        {/* Device table */}
-        <div className={cn("space-y-3 mb-6", processing && "pointer-events-none opacity-75")}>
+        {/* Run complete link — once when done */}
+        {completedRunId && !processing && (
+          <div className="mb-4 flex items-center gap-2 text-sm text-primary">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Run complete.</span>
+            <Link href={`/runs/${completedRunId}`} className="font-medium underline">
+              View run
+            </Link>
+          </div>
+        )}
+
+        {/* Device list: each device shows form, then (when processing) job ID + iframes, then (when done) tables — all collapsible. No pointer-events-none so live sessions stay interactive. */}
+        <div className="space-y-4 mb-6">
           {devices.map((device, idx) => (
-            <div key={device.id} className="bg-card border border-border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Device {idx + 1}</span>
-                {devices.length > 1 && !processing && (
-                  <button
-                    onClick={() => removeDevice(device.id)}
-                    className="text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
+            <div key={device.id} className="bg-card border border-border rounded-lg overflow-hidden">
+              {/* Device form */}
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Device {idx + 1}</span>
+                  {devices.length > 1 && !processing && (
+                    <button
+                      onClick={() => removeDevice(device.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs mb-1 block">Storage *</Label>
+                    <Input
+                      placeholder="e.g. 128"
+                      value={device.storage}
+                      onChange={e => updateDevice(device.id, "storage", e.target.value)}
+                      className="h-8 text-xs"
+                      disabled={processing}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Model *</Label>
+                    <Input
+                      placeholder="e.g. iPhone 16"
+                      value={device.model}
+                      onChange={e => updateDevice(device.id, "model", e.target.value)}
+                      className="h-8 text-xs"
+                      disabled={processing}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Ram *</Label>
+                    <Input
+                      placeholder="e.g. 6"
+                      value={device.ram}
+                      onChange={e => updateDevice(device.id, "ram", e.target.value)}
+                      className="h-8 text-xs"
+                      disabled={processing}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Color *</Label>
+                    <Input
+                      placeholder="e.g. Black"
+                      value={device.color}
+                      onChange={e => updateDevice(device.id, "color", e.target.value)}
+                      className="h-8 text-xs"
+                      disabled={processing}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs mb-1 block">Condition</Label>
+                    <Select value={device.condition} onValueChange={v => updateDevice(device.id, "condition", v as Condition)}>
+                      <SelectTrigger className="h-8 text-xs" disabled={processing}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CONDITIONS.map(c => <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <div>
-                  <Label className="text-xs mb-1 block">Storage *</Label>
-                  <Input
-                    placeholder="e.g. 128"
-                    value={device.storage}
-                    onChange={e => updateDevice(device.id, "storage", e.target.value)}
-                    className="h-8 text-xs"
-                    disabled={processing}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs mb-1 block">Model *</Label>
-                  <Input
-                    placeholder="e.g. iPhone 16"
-                    value={device.model}
-                    onChange={e => updateDevice(device.id, "model", e.target.value)}
-                    className="h-8 text-xs"
-                    disabled={processing}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs mb-1 block">Ram *</Label>
-                  <Input
-                    placeholder="e.g. 6"
-                    value={device.ram}
-                    onChange={e => updateDevice(device.id, "ram", e.target.value)}
-                    className="h-8 text-xs"
-                    disabled={processing}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs mb-1 block">Color *</Label>
-                  <Input
-                    placeholder="e.g. Black"
-                    value={device.color}
-                    onChange={e => updateDevice(device.id, "color", e.target.value)}
-                    className="h-8 text-xs"
-                    disabled={processing}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs mb-1 block">Condition</Label>
-                  <Select value={device.condition} onValueChange={v => updateDevice(device.id, "condition", v as Condition)}>
-                    <SelectTrigger className="h-8 text-xs" disabled={processing}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CONDITIONS.map(c => <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+
+              {/* Under this device: Job ID + Live iframes (collapsible) when processing */}
+              {processing && jobId && (liveUrlsByDevice[idx]?.length ?? 0) > 0 && (
+                <Collapsible defaultOpen className="group border-t border-border">
+                  <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-2.5 bg-muted/40 hover:bg-muted/60 text-left text-sm font-medium transition-colors">
+                    <span>Job ID & live browser sessions — Device {idx + 1}</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="px-4 pb-3 space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Job ID: <code className="bg-muted px-1.5 py-0.5 rounded text-[11px] font-mono">{jobId}</code>
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">If a frame is blank, use &quot;Open in new tab&quot;.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {(liveUrlsByDevice[idx] ?? []).map((url, i) => {
+                          const sourceLabels = ["Ovantica", "ReFit Global", "Cashify"]
+                          const label = sourceLabels[i] ?? `Session ${i + 1}`
+                          return (
+                            <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
+                              <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 font-medium truncate" title={url}>
+                                {label}
+                              </p>
+                              <iframe
+                                src={url}
+                                title={`Device ${idx + 1}: ${label}`}
+                                className="w-full h-[240px] min-h-[180px] border-0 bg-background"
+                                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                                allow="fullscreen"
+                              />
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
+                              >
+                                Open in new tab <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
+
+              {/* Under this device: Result + Scraped data tables (collapsible) when done */}
+              {!processing && lastScrapeResults && (lastRunResults?.[idx] != null || lastScrapeResults) && (
+                <Collapsible defaultOpen={false} className="group border-t border-border">
+                  <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-2.5 bg-muted/40 hover:bg-muted/60 text-left text-sm font-medium transition-colors">
+                    <span>Result & scraped data — Device {idx + 1}</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="px-4 pb-4 space-y-4">
+                      {lastRunResults?.[idx] != null && (
+                        <div className="rounded-lg border border-border p-3 bg-muted/20">
+                          <p className="text-xs font-medium text-foreground mb-1">Recommended price</p>
+                          <p className="text-lg font-semibold text-primary">₹{lastRunResults[idx].recommendedPrice?.toLocaleString() ?? "—"}</p>
+                          <p className="text-xs text-muted-foreground mt-2">{lastRunResults[idx].pricingExplanation ?? "—"}</p>
+                        </div>
+                      )}
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Scraped data by source</p>
+                      {[
+                        { key: "ovantica", label: "Ovantica" },
+                        { key: "refitglobal", label: "ReFit Global" },
+                        { key: "cashify", label: "Cashify" },
+                      ].map(({ key, label }) => {
+                        const rows = lastScrapeResults[key] ?? []
+                        return (
+                          <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
+                            <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                              <p className="text-sm font-medium text-foreground">{label}</p>
+                              <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
+                            </div>
+                            <div className="overflow-x-auto">
+                              {rows.length > 0 ? (
+                                <table className="w-full text-xs min-w-[320px]">
+                                  <thead>
+                                    <tr className="bg-muted/30 border-b border-border">
+                                      <th className="text-left py-2 px-3 font-medium">Storage</th>
+                                      <th className="text-left py-2 px-3 font-medium">Model</th>
+                                      <th className="text-left py-2 px-3 font-medium">RAM</th>
+                                      <th className="text-left py-2 px-3 font-medium">Color</th>
+                                      <th className="text-left py-2 px-3 font-medium">Condition</th>
+                                      <th className="text-left py-2 px-3 font-medium">Price</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map((row, i) => (
+                                      <tr key={i} className="border-b border-border last:border-0">
+                                        <td className="py-2 px-3">{row.Storage ?? "—"}</td>
+                                        <td className="py-2 px-3">{row.Model ?? "—"}</td>
+                                        <td className="py-2 px-3">{row.Ram ?? "—"}</td>
+                                        <td className="py-2 px-3">{row.Color ?? "—"}</td>
+                                        <td className="py-2 px-3">{row.Condition ?? "—"}</td>
+                                        <td className="py-2 px-3">{row.Price ?? "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              ) : (
+                                <p className="text-xs text-muted-foreground px-3 py-4">No listings from this source.</p>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
           ))}
         </div>
@@ -412,105 +545,6 @@ export default function NewRunPage() {
           </div>
         </div>
 
-        {/* Live session iframes: show while job is running */}
-        {liveUrls.length > 0 && processing && (
-          <div className="mt-6 rounded-lg border border-border overflow-hidden">
-            <p className="text-xs font-medium text-muted-foreground px-3 py-2 bg-muted/50">
-              Live browser sessions — watch the scrape in progress. If the frame is blank, use &quot;Open in new tab&quot;.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3">
-              {liveUrls.map((url, i) => {
-                const sourceLabels = ["Ovantica", "ReFit Global", "Cashify"]
-                const label = sourceLabels[i] ?? `Session ${i + 1}`
-                return (
-                  <div key={i} className="rounded-lg border border-border overflow-hidden bg-muted/30">
-                    <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 font-medium truncate" title={url}>
-                      {label}
-                    </p>
-                    <iframe
-                      src={url}
-                      title={`Live scrape: ${label}`}
-                      className="w-full h-[280px] min-h-[200px] border-0 bg-background"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                      allow="fullscreen"
-                    />
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
-                    >
-                      Open in new tab <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* After completion: 3 tables by source (under device section) */}
-        {lastScrapeResults && !processing && (
-          <div className="mt-6 space-y-6">
-            {completedRunId && (
-              <div className="flex items-center gap-2 text-sm text-primary">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Run complete.</span>
-                <Link href={`/runs/${completedRunId}`} className="font-medium underline">
-                  View run
-                </Link>
-              </div>
-            )}
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Scraped data by source
-            </p>
-            {[
-              { key: "ovantica", label: "Ovantica" },
-              { key: "refitglobal", label: "ReFit Global" },
-              { key: "cashify", label: "Cashify" },
-            ].map(({ key, label }) => {
-              const rows = lastScrapeResults[key] ?? []
-              return (
-                <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
-                  <div className="px-3 py-2 bg-muted/50 border-b border-border">
-                    <p className="text-sm font-medium text-foreground">{label}</p>
-                    <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    {rows.length > 0 ? (
-                      <table className="w-full text-xs min-w-[320px]">
-                        <thead>
-                          <tr className="bg-muted/30 border-b border-border">
-                            <th className="text-left py-2 px-3 font-medium">Storage</th>
-                            <th className="text-left py-2 px-3 font-medium">Model</th>
-                            <th className="text-left py-2 px-3 font-medium">RAM</th>
-                            <th className="text-left py-2 px-3 font-medium">Color</th>
-                            <th className="text-left py-2 px-3 font-medium">Condition</th>
-                            <th className="text-left py-2 px-3 font-medium">Price</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((row, i) => (
-                            <tr key={i} className="border-b border-border last:border-0">
-                              <td className="py-2 px-3">{row.Storage ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Model ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Ram ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Color ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Condition ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Price ?? "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <p className="text-xs text-muted-foreground px-3 py-4">No listings from this source.</p>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
       </div>
     </AppShell>
   )

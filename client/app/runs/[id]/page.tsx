@@ -328,6 +328,67 @@ export default function RunResultsPage() {
                       </div>
                     )}
 
+                    {/* Scraped data by source — 3 tables, this device only */}
+                    {run.scrapeResults && Object.keys(run.scrapeResults).length > 0 && (() => {
+                      const deviceModelNorm = device.model.trim().toLowerCase()
+                      const sourceConfig = [
+                        { key: "ovantica", label: "Ovantica" },
+                        { key: "refitglobal", label: "ReFit Global" },
+                        { key: "cashify", label: "Cashify" },
+                      ] as const
+                      const rowMatchesDevice = (rowModel: string | undefined) => {
+                        const r = (rowModel ?? "").trim().toLowerCase()
+                        return r === deviceModelNorm || r.includes(deviceModelNorm) || deviceModelNorm.includes(r)
+                      }
+                      return (
+                        <div className="space-y-4">
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Scraped data by source</p>
+                          {sourceConfig.map(({ key, label }) => {
+                            const allRows = run.scrapeResults![key] ?? []
+                            const rows = allRows.filter((row: { Model?: string }) => rowMatchesDevice(row.Model))
+                            return (
+                              <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
+                                <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                                  <p className="text-sm font-medium text-foreground">{label}</p>
+                                  <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  {rows.length > 0 ? (
+                                    <table className="w-full text-xs min-w-[320px]">
+                                      <thead>
+                                        <tr className="bg-muted/30 border-b border-border">
+                                          <th className="text-left py-2 px-3 font-medium">Storage</th>
+                                          <th className="text-left py-2 px-3 font-medium">Model</th>
+                                          <th className="text-left py-2 px-3 font-medium">RAM</th>
+                                          <th className="text-left py-2 px-3 font-medium">Color</th>
+                                          <th className="text-left py-2 px-3 font-medium">Condition</th>
+                                          <th className="text-left py-2 px-3 font-medium">Price</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {rows.map((row: { Storage?: string; Model?: string; Ram?: string; Color?: string; Condition?: string; Price?: string }, i: number) => (
+                                          <tr key={i} className="border-b border-border last:border-0">
+                                            <td className="py-2 px-3">{row.Storage ?? "—"}</td>
+                                            <td className="py-2 px-3">{row.Model ?? "—"}</td>
+                                            <td className="py-2 px-3">{row.Ram ?? "—"}</td>
+                                            <td className="py-2 px-3">{row.Color ?? "—"}</td>
+                                            <td className="py-2 px-3">{row.Condition ?? "—"}</td>
+                                            <td className="py-2 px-3">{row.Price ?? "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground px-3 py-4">No listings for this device from this source.</p>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
+
                     {/* Human review */}
                     {feedbackMode && (
                       <div className="border-t border-border pt-4">
@@ -395,60 +456,6 @@ export default function RunResultsPage() {
             )
           })}
         </div>
-
-        {/* Scraped data by source (saved with run) */}
-        {run.scrapeResults && Object.keys(run.scrapeResults).length > 0 && (
-          <div className="mt-8 space-y-6">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Scraped data by source
-            </p>
-            {[
-              { key: "ovantica", label: "Ovantica" },
-              { key: "refitglobal", label: "ReFit Global" },
-              { key: "cashify", label: "Cashify" },
-            ].map(({ key, label }) => {
-              const rows = run.scrapeResults![key] ?? []
-              return (
-                <div key={key} className="rounded-lg border border-border overflow-hidden bg-card">
-                  <div className="px-3 py-2 bg-muted/50 border-b border-border">
-                    <p className="text-sm font-medium text-foreground">{label}</p>
-                    <p className="text-[10px] text-muted-foreground">{rows.length} listing(s)</p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    {rows.length > 0 ? (
-                      <table className="w-full text-xs min-w-[320px]">
-                        <thead>
-                          <tr className="bg-muted/30 border-b border-border">
-                            <th className="text-left py-2 px-3 font-medium">Storage</th>
-                            <th className="text-left py-2 px-3 font-medium">Model</th>
-                            <th className="text-left py-2 px-3 font-medium">RAM</th>
-                            <th className="text-left py-2 px-3 font-medium">Color</th>
-                            <th className="text-left py-2 px-3 font-medium">Condition</th>
-                            <th className="text-left py-2 px-3 font-medium">Price</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((row: { Storage?: string; Model?: string; Ram?: string; Color?: string; Condition?: string; Price?: string }, i: number) => (
-                            <tr key={i} className="border-b border-border last:border-0">
-                              <td className="py-2 px-3">{row.Storage ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Model ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Ram ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Color ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Condition ?? "—"}</td>
-                              <td className="py-2 px-3">{row.Price ?? "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <p className="text-xs text-muted-foreground px-3 py-4">No listings from this source.</p>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
 
         {/* Submit feedback */}
         {feedbackMode && (
