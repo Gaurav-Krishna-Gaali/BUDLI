@@ -12,13 +12,12 @@ import { Input } from "@/components/ui/input"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, getKBEntries, getKBPatterns } from "@/lib/store"
 import { startBrowserScrape, getScrapeResults } from "@/lib/pricing-engine"
-import { VelocityBadge } from "@/components/velocity-badge"
 import type { Run, ScrapeResultsResponse } from "@/lib/types"
 
 const WORKFLOW_STEPS = [
   { step: "01", title: "Upload Devices", desc: "Provide a CSV or enter up to 10 device models with specs and condition." },
   { step: "02", title: "Market Signal Collection", desc: "Engine references Flipkart, OLX & Cashify pricing and demand data." },
-  { step: "03", title: "Pricing & Velocity", desc: "Rule-based logic computes recommended price and sell-through velocity." },
+  { step: "03", title: "Pricing", desc: "Device is matched to scraped listings; AI recommends price and reports which sources had data." },
   { step: "04", title: "Explanation Generation", desc: "Human-readable rationale with market drivers and risk flags." },
   { step: "05", title: "Human Review", desc: "Pricing manager reviews, adjusts, and approves each recommendation." },
   { step: "06", title: "Feedback to KB", desc: "Approved decisions are stored — future runs learn from this history." },
@@ -99,9 +98,6 @@ export default function DashboardPage() {
   }
 
   const allResults = runs.flatMap(r => r.results)
-  const avgConfidence = allResults.length
-    ? Math.round(allResults.reduce((s, r) => s + r.confidenceScore, 0) / allResults.length)
-    : 0
 
   const recentRuns = runs.slice(0, 4)
   const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`
@@ -121,7 +117,7 @@ export default function DashboardPage() {
               </h1>
               <p className="text-muted-foreground text-sm leading-relaxed max-w-lg">
                 Upload a CSV of refurbished smartphone models and receive AI-generated pricing
-                recommendations, sell-through velocity estimates, and human-readable explanations
+                recommendations and human-readable explanations
                 — with full human control over final decisions.
               </p>
             </div>
@@ -149,7 +145,7 @@ export default function DashboardPage() {
             { label: "Total Runs", value: runs.length || "—", sub: "pricing analyses" },
             { label: "Devices Priced", value: runs.flatMap(r => r.devices).length || "—", sub: "across all runs" },
             { label: "KB Entries", value: kbCount || "—", sub: `${patternCount} learned pattern${patternCount !== 1 ? "s" : ""}` },
-            { label: "Avg Confidence", value: avgConfidence ? `${avgConfidence}%` : "—", sub: "AI recommendation quality" },
+            { label: "With data", value: allResults.filter(r => (r.dataFoundIn?.length ?? 0) > 0).length || "—", sub: "devices with market data" },
           ].map(stat => (
             <div key={stat.label} className="bg-card border border-border rounded-lg p-4">
               <p className="text-xs text-muted-foreground">{stat.label}</p>

@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { Plus, Trash2, CheckCircle2, Clock, ChevronRight, FileText } from "lucide-react"
+import { Plus, Trash2, CheckCircle2, Clock, ChevronRight, FileText, Database } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, deleteRun } from "@/lib/store"
-import { VelocityBadge } from "@/components/velocity-badge"
 import type { Run } from "@/lib/types"
 
 export default function HistoryPage() {
@@ -59,7 +58,7 @@ export default function HistoryPage() {
               const avgPrice = run.results.length
                 ? Math.round(run.results.reduce((s, r) => s + r.recommendedPrice, 0) / run.results.length)
                 : 0
-              const fastCount = run.results.filter(r => r.velocityCategory === "Fast").length
+              const withDataCount = run.results.filter(r => (r.dataFoundIn?.length ?? 0) > 0).length
 
               return (
                 <Link
@@ -94,9 +93,16 @@ export default function HistoryPage() {
                         <p className="text-sm font-semibold text-primary">{run.results.length ? formatINR(avgPrice) : "—"}</p>
                       </div>
                       <div className="text-center">
-                        <p className="text-xs text-muted-foreground">Fast Movers</p>
-                        <div className="flex justify-center mt-0.5">
-                          {fastCount > 0 ? <VelocityBadge velocity="Fast" size="sm" /> : <span className="text-sm font-semibold">—</span>}
+                        <p className="text-xs text-muted-foreground">With data</p>
+                        <div className="flex justify-center items-center gap-1 mt-0.5">
+                          {withDataCount > 0 ? (
+                            <>
+                              <Database className="w-3.5 h-3.5 text-primary" />
+                              <span className="text-sm font-semibold">{withDataCount}</span>
+                            </>
+                          ) : (
+                            <span className="text-sm font-semibold">—</span>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">

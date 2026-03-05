@@ -35,6 +35,7 @@ export default function NewRunPage() {
   const [csvSuccess, setCsvSuccess] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [activeTab, setActiveTab] = useState<"manual" | "csv">("manual")
+  const [jobId, setJobId] = useState<string | null>(null)
 
   const addDevice = () => {
     if (devices.length >= 10) return
@@ -119,13 +120,15 @@ export default function NewRunPage() {
     const err = validateDevices()
     if (err) { setCsvError(err); return }
 
+    const runId = crypto.randomUUID()
+    setJobId(runId)
     setProcessing(true)
 
     try {
       const kbPatterns = await getKBPatterns()
       const results = await processRun(devices, kbPatterns)
       const run = {
-        id: crypto.randomUUID(),
+        id: runId,
         name: runName || `Run ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
         status: "completed" as const,
         createdAt: new Date().toISOString(),
@@ -140,6 +143,7 @@ export default function NewRunPage() {
     } catch (apiError: any) {
       setCsvError(apiError.message || "An error occurred while generating recommendations.")
       setProcessing(false)
+      setJobId(null)
     }
   }
 
@@ -153,7 +157,7 @@ export default function NewRunPage() {
           <h1 className="text-xl sm:text-2xl font-bold text-foreground text-balance">New Pricing Run</h1>
           <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
             Upload a CSV or enter up to 10 device models. The engine will generate pricing recommendations,
-            velocity estimates, and explanations.
+            pricing recommendations and explanations. We match your devices to scraped listings and show which sources had data.
           </p>
         </div>
 
@@ -166,15 +170,17 @@ export default function NewRunPage() {
             value={runName}
             onChange={e => setRunName(e.target.value)}
             className="w-full sm:max-w-sm"
+            disabled={processing}
           />
         </div>
 
         {/* Tab switcher */}
-        <div className="flex gap-2 mb-6 border-b border-border">
+        <div className={cn("flex gap-2 mb-6 border-b border-border", processing && "pointer-events-none opacity-60")}>
           {(["manual", "csv"] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
+              disabled={processing}
               className={cn(
                 "px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px",
                 activeTab === tab
@@ -188,10 +194,10 @@ export default function NewRunPage() {
         </div>
 
         {activeTab === "csv" ? (
-          <div className="mb-6">
+          <div className={cn("mb-6", processing && "pointer-events-none opacity-60")}>
             <div
               className="border-2 border-dashed border-border rounded-lg p-10 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
-              onClick={() => fileRef.current?.click()}
+              onClick={() => !processing && fileRef.current?.click()}
             >
               <UploadCloud className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
               <p className="text-sm font-medium text-foreground mb-1">Click to upload CSV</p>
@@ -228,12 +234,12 @@ export default function NewRunPage() {
         ) : null}
 
         {/* Device table */}
-        <div className="space-y-3 mb-6">
+        <div className={cn("space-y-3 mb-6", processing && "pointer-events-none opacity-75")}>
           {devices.map((device, idx) => (
             <div key={device.id} className="bg-card border border-border rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Device {idx + 1}</span>
-                {devices.length > 1 && (
+                {devices.length > 1 && !processing && (
                   <button
                     onClick={() => removeDevice(device.id)}
                     className="text-muted-foreground hover:text-destructive transition-colors"
@@ -250,6 +256,7 @@ export default function NewRunPage() {
                     value={device.storage}
                     onChange={e => updateDevice(device.id, "storage", e.target.value)}
                     className="h-8 text-xs"
+                    disabled={processing}
                   />
                 </div>
                 <div>
@@ -259,6 +266,7 @@ export default function NewRunPage() {
                     value={device.model}
                     onChange={e => updateDevice(device.id, "model", e.target.value)}
                     className="h-8 text-xs"
+                    disabled={processing}
                   />
                 </div>
                 <div>
@@ -268,6 +276,7 @@ export default function NewRunPage() {
                     value={device.ram}
                     onChange={e => updateDevice(device.id, "ram", e.target.value)}
                     className="h-8 text-xs"
+                    disabled={processing}
                   />
                 </div>
                 <div>
@@ -277,12 +286,13 @@ export default function NewRunPage() {
                     value={device.color}
                     onChange={e => updateDevice(device.id, "color", e.target.value)}
                     className="h-8 text-xs"
+                    disabled={processing}
                   />
                 </div>
                 <div>
                   <Label className="text-xs mb-1 block">Condition</Label>
                   <Select value={device.condition} onValueChange={v => updateDevice(device.id, "condition", v as Condition)}>
-                    <SelectTrigger className="h-8 text-xs">
+                    <SelectTrigger className="h-8 text-xs" disabled={processing}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -296,7 +306,7 @@ export default function NewRunPage() {
         </div>
 
         {/* Add device */}
-        {devices.length < 10 && (
+        {devices.length < 10 && !processing && (
           <button
             onClick={addDevice}
             className="flex items-center gap-2 text-sm text-primary hover:text-primary/80 transition-colors mb-6 border border-dashed border-primary/30 rounded-lg px-4 py-2.5 w-full justify-center hover:bg-primary/5"
@@ -332,9 +342,16 @@ export default function NewRunPage() {
               </>
             )}
           </Button>
-          <span className="text-xs text-muted-foreground">
-            {devices.length} device{devices.length !== 1 ? "s" : ""} &bull; Sale prices: Cashify, Ovantica, Refit Global &bull; Velocity: Flipkart &amp; Amazon
-          </span>
+          <div className="flex flex-col gap-0.5">
+            {jobId && (
+              <p className="text-xs font-medium text-foreground">
+                Job ID: <code className="bg-muted px-1.5 py-0.5 rounded text-[11px] font-mono">{jobId}</code>
+              </p>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {devices.length} device{devices.length !== 1 ? "s" : ""} &bull; Sale prices: Cashify, Ovantica, Refit Global &bull; Velocity: Flipkart &amp; Amazon
+            </span>
+          </div>
         </div>
       </div>
     </AppShell>

@@ -40,10 +40,9 @@ export async function getScrapeResults(jobId: string): Promise<ScrapeResultsResp
 interface AnalyzeDevicesApiResult {
   id: string
   predicted_price?: string
-  velocity?: string
   explanation?: string
   risk_flags?: string[]
-  confidence_score?: number | null
+  data_found_in?: string[]  // e.g. ["Ovantica", "ReFit Global", "Cashify"]
   source_url?: string
   source_urls?: Array<{ source: string; url: string }>
 }
@@ -396,17 +395,6 @@ export async function processRun(
       const low = Math.round((rec * 0.92) / 100) * 100;
       const high = Math.round((rec * 1.08) / 100) * 100;
 
-      let velCat: VelocityCategory = "Medium";
-      if (
-        r.velocity === "Very Good" ||
-        r.velocity === "Good" ||
-        r.velocity === "Fast"
-      )
-        velCat = "Fast";
-      if (r.velocity === "Average" || r.velocity === "Slow") velCat = "Slow";
-
-      const velDays = velCat === "Fast" ? 5 : velCat === "Medium" ? 18 : 42;
-
       const marketSignals: MarketSignal[] =
         r.source_urls && Array.isArray(r.source_urls) && r.source_urls.length > 0
           ? r.source_urls.map((s: { source: string; url: string }) => ({
@@ -438,11 +426,8 @@ export async function processRun(
         recommendedPrice: rec,
         priceLow: low,
         priceHigh: high,
-        confidenceScore: rec > 0 ? (r.confidence_score ?? 80) : 0,
-        velocityCategory: velCat,
-        velocityDaysEstimate: velDays,
+        dataFoundIn: r.data_found_in ?? [],
         pricingExplanation: r.explanation || "No explanation provided.",
-        velocityExplanation: r.velocity || "No velocity data.",
         riskFlags: r.risk_flags || [],
         marketSignals,
         sourceUrl: r.source_url,

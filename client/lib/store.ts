@@ -120,9 +120,8 @@ export function parseCSV(text: string): Record<string, string>[] {
 export function generateOutputCSV(run: Run): string {
   const headers = [
     "Storage", "Model", "Ram", "Color", "Condition",
-    "recommended_price", "predicted_price", "price_high", "confidence",
-    "velocity", "velocity_days",
-    "explanation", "velocity_explanation", "risk_flags",
+    "recommended_price", "predicted_price", "price_high",
+    "data_found_in", "explanation", "risk_flags",
     "human_approved_price", "human_velocity_override", "feedback_note", "accepted", "source_url"
   ]
 
@@ -139,12 +138,9 @@ export function generateOutputCSV(run: Run): string {
       result.recommendedPrice.toString(),
       result.priceLow.toString(),
       result.priceHigh.toString(),
-      result.confidenceScore.toString(),
-      result.velocityCategory,
-      result.velocityDaysEstimate.toString(),
-      `"${result.pricingExplanation.replace(/"/g, "'")}"`,
-      `"${result.velocityExplanation.replace(/"/g, "'")}"`,
-      `"${result.riskFlags.join("; ").replace(/"/g, "'")}"`,
+      (result.dataFoundIn ?? []).join("; "),
+      `"${(result.pricingExplanation ?? "").replace(/"/g, "'")}"`,
+      `"${(result.riskFlags ?? []).join("; ").replace(/"/g, "'")}"`,
       result.humanApprovedPrice?.toString() ?? "",
       result.humanVelocityOverride ?? "",
       result.humanFeedbackNote ?? "",

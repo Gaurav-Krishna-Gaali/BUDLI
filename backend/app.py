@@ -412,10 +412,9 @@ class SourceUrl(BaseModel):
 class AnalyzeDevicesResponseItem(BaseModel):
     id: str
     predicted_price: str
-    velocity: str
     explanation: str
     risk_flags: list[str]
-    confidence_score: Optional[int] = None
+    data_found_in: list[str] = []  # e.g. ["Ovantica", "ReFit Global", "Cashify"] — sources that had scraped listings
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
 
@@ -517,7 +516,7 @@ async def _run_bedrock_analysis(
     network_type: str,
     condition_tier: str,
     warranty_months: str,
-) -> tuple[Optional[str], Optional[str], Optional[str], list[str], Optional[int], str, list[dict]]:
+) -> tuple[Optional[str], Optional[str], list[str], str, list[dict], list[str]]:
     query_string = (
         "Device Input:\n"
         f"Brand: {brand}\n"
@@ -559,34 +558,29 @@ async def _run_bedrock_analysis(
             {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={urllib.parse.quote_plus(search_query)}"},
             {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={urllib.parse.quote_plus(search_query)}"},
         ]
-        return "", "", "", [], None, fallback_urls[0]["url"], fallback_urls
+        return "", "", [], fallback_urls[0]["url"], fallback_urls, []
 
-    # Build a structured pricing prompt and ask for JSON.
+    # Which sources had data (for user-facing message)
+    _SOURCE_LABELS = {"ovantica": "Ovantica", "refitglobal": "ReFit Global", "cashify": "Cashify"}
+    sources_with_data = [
+        _SOURCE_LABELS.get(s, s) for s in sorted(set(d.get("source") for d in scraped_devices if d.get("source")))
+    ]
+
+    # Build a structured pricing prompt: map device to scraped data and recommend price.
     instructions = (
         "You are Budli's Pricing Intelligence AI.\n\n"
         "You receive:\n"
         "- Device attributes (brand, model, storage, condition, warranty, RAM, network type)\n"
-        "- External market signals from scraped listings (price, title, link, source) in JSON. "
-        "Sources include 'ovantica', 'refitglobal' (ReFit Global), and 'cashify'. Use all when available.\n\n"
-        "For the given device and signals, decide a competitive selling strategy.\n\n"
-        "Return ONLY a JSON object with the following fields:\n\n"
+        "- Scraped listings (price, title, link, source) from Ovantica, ReFit Global, and/or Cashify.\n\n"
+        "Map the device to the scraped data and recommend a competitive price based on the listings.\n\n"
+        "Return ONLY a JSON object with these fields:\n\n"
         "1. recommended_price: number (in INR, no currency symbol, e.g. 28999)\n"
-        "2. velocity: string (\"Very Good\" | \"Good\" | \"Neutral\" | \"Average\" | \"Slow\")\n"
-        "3. explanation: string (2–4 sentences explaining the pricing decision)\n"
-        "4. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Low demand\", \"Data sparse\"]).\n"
-        "5. confidence_score: integer 0-100 reflecting how confident you are in this "
-        "recommendation given the scraped data quality, listing density, and price spread. "
-        "Use 90-100 for abundant, consistent data; 70-89 for moderate data; "
-        "50-69 for sparse/conflicting data; below 50 for very limited data.\n\n"
-        "Velocity: base it on scraped listing density, price spread, and how competitive the device is. "
-        "Use \"Very Good\" or \"Good\" for strong demand signals (many listings, tight spread); "
-        "\"Neutral\" or \"Average\" for moderate; \"Slow\" for sparse or wide-spread data.\n\n"
+        "2. explanation: string (2–4 sentences explaining the pricing decision and which listings you used)\n"
+        "3. risk_flags: array of strings (e.g. [\"Below competitor floor\", \"Data sparse\", \"No matching config\"]).\n\n"
         "Pricing guidelines:\n"
-        "- Start from the central tendency (median preferred) of scraped prices.\n"
-        "- Adjust downward for worse condition or weaker warranty vs typical, upward for better.\n"
-        "- For Very Good/Good velocity: price at or above market median to capture demand premium.\n"
-        "- For Average/Slow velocity: price 5-10% below market median to accelerate inventory turnover.\n"
-        "- Ensure recommended_price is not unreasonably far from both market average and lowest competitor unless clearly justified.\n"
+        "- Start from the central tendency (median preferred) of scraped prices that match or are close to the device.\n"
+        "- Adjust for condition and warranty vs typical listings.\n"
+        "- Ensure recommended_price is not unreasonably far from market average and lowest competitor unless clearly justified.\n"
     )
 
     try:
@@ -609,10 +603,8 @@ async def _run_bedrock_analysis(
             temperature=0.1,
         )
         predicted_price: Optional[str] = ""
-        velocity: Optional[str] = ""
         explanation: Optional[str] = ""
         risk_flags: list[str] = []
-        confidence_score: Optional[int] = None
         try:
             # Strip markdown code fences if present (e.g. ```json ... ```)
             text = analysis_text.strip()
@@ -625,23 +617,13 @@ async def _run_bedrock_analysis(
                 text = "\n".join(lines)
             parsed = json.loads(text)
             value = parsed.get("recommended_price")
-            vel_value = parsed.get("velocity")
             explanation = parsed.get("explanation", "")
             risk_flags = parsed.get("risk_flags", [])
-            confidence_score = parsed.get("confidence_score")
-            
             if value is not None:
                 predicted_price = str(value)
                 logger.info("Row %d: predicted_price=%s", idx, predicted_price)
-            if vel_value is not None:
-                velocity = str(vel_value)
-                logger.info("Row %d: velocity=%s", idx, velocity)
             else:
-                logger.warning(
-                    "Row %d: analysis JSON missing 'recommended_price' and/or 'velocity': %s",
-                    idx,
-                    analysis_text,
-                )
+                logger.warning("Row %d: analysis JSON missing 'recommended_price': %s", idx, analysis_text)
         except Exception as parse_err:
             logger.warning(
                 "Row %d: could not parse analysis as JSON (%s); raw text: %s",
@@ -650,14 +632,13 @@ async def _run_bedrock_analysis(
                 analysis_text,
             )
             predicted_price = ""
-            velocity = ""
 
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return predicted_price, velocity, explanation, risk_flags, confidence_score, primary_url, source_urls
+        return predicted_price, explanation, risk_flags, primary_url, source_urls, sources_with_data
     except Exception as bedrock_err:
         logger.exception("Row %d: Bedrock analysis failed: %s", idx, bedrock_err)
         primary_url = source_urls[0]["url"] if source_urls else ""
-        return "", "", "", [], None, primary_url, source_urls
+        return "", "", [], primary_url, source_urls, []
 
 
 @app.post(
@@ -695,8 +676,8 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
     # Ensure output columns exist.
     if "predicted_price" not in fieldnames:
         fieldnames.append("predicted_price")
-    if "velocity" not in fieldnames:
-        fieldnames.append("velocity")
+    if "data_found_in" not in fieldnames:
+        fieldnames.append("data_found_in")
     if "source_url" not in fieldnames:
         fieldnames.append("source_url")
     if "source_urls" not in fieldnames:
@@ -715,7 +696,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         condition_tier = (row.get("condition_tier") or "").strip()
         warranty_months = (row.get("warranty_months") or "").strip()
 
-        predicted_price, velocity, explanation, risk_flags, confidence_score, source_url, source_urls = await _run_bedrock_analysis(
+        predicted_price, explanation, risk_flags, source_url, source_urls, data_found_in = await _run_bedrock_analysis(
             idx,
             brand,
             model,
@@ -727,7 +708,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
         )
 
         row["predicted_price"] = predicted_price
-        row["velocity"] = velocity
+        row["data_found_in"] = ", ".join(data_found_in) if data_found_in else "—"
         row["source_url"] = source_url
         row["source_urls"] = json.dumps(source_urls) if source_urls else "[]"
         writer.writerow(row)
@@ -743,7 +724,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
-        price, vel, explanation, flags, confidence_score, source_url, source_urls = await _run_bedrock_analysis(
+        price, explanation, flags, source_url, source_urls, data_found_in = await _run_bedrock_analysis(
             idx,
             d.brand,
             d.model,
@@ -756,10 +737,9 @@ async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
         results.append(AnalyzeDevicesResponseItem(
             id=d.id,
             predicted_price=price or "",
-            velocity=vel or "",
             explanation=explanation or "",
             risk_flags=flags or [],
-            confidence_score=confidence_score,
+            data_found_in=data_found_in or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
         ))

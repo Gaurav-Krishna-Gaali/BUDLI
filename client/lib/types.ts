@@ -28,11 +28,17 @@ export interface PricingResult {
   recommendedPrice: number
   priceLow: number
   priceHigh: number
-  confidenceScore: number // 0-100
-  velocityCategory: VelocityCategory
-  velocityDaysEstimate: number
+  /** Sources that had scraped data (e.g. ["Ovantica", "ReFit Global", "Cashify"]) */
+  dataFoundIn?: string[]
+  /** @deprecated Backend no longer returns; kept for old runs */
+  confidenceScore?: number
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityCategory?: VelocityCategory
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityDaysEstimate?: number
   pricingExplanation: string
-  velocityExplanation: string
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityExplanation?: string
   riskFlags: string[]
   marketSignals: MarketSignal[]
   sourceUrl?: string

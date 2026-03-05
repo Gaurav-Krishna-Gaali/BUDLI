@@ -4,15 +4,15 @@ import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
   Download, CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  ArrowLeft, MessageSquare, Send, ExternalLink, Info
+  ArrowLeft, MessageSquare, Send, ExternalLink, Info, Globe
 } from "lucide-react"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { AppShell } from "@/components/app-shell"
-import { VelocityBadge } from "@/components/velocity-badge"
-import { ConfidenceRing } from "@/components/confidence-ring"
+import { Database } from "lucide-react"
 import { getRun, saveRun, generateOutputCSV, addKBEntries } from "@/lib/store"
 import type { Run, PricingResult, VelocityCategory, KnowledgeBaseEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -83,7 +83,7 @@ export default function RunResultsPage() {
           recommendedPrice: result.recommendedPrice,
           humanApprovedPrice: approvedPrice,
           delta: approvedPrice - result.recommendedPrice,
-          velocityCategory: result.velocityCategory,
+          velocityCategory: result.velocityCategory ?? "Medium",
           humanVelocityOverride: result.humanVelocityOverride,
           feedbackNote: result.humanFeedbackNote,
           runId: run.id,
@@ -146,8 +146,8 @@ export default function RunResultsPage() {
           {[
             { label: "Devices", value: run.devices.length },
             { label: "Avg Price", value: formatINR(Math.round(localResults.reduce((s, r) => s + r.recommendedPrice, 0) / localResults.length)) },
-            { label: "Fast Movers", value: localResults.filter(r => r.velocityCategory === "Fast").length },
-            { label: "Avg Confidence", value: `${Math.round(localResults.reduce((s, r) => s + r.confidenceScore, 0) / localResults.length)}%` },
+            { label: "With data", value: localResults.filter(r => (r.dataFoundIn?.length ?? 0) > 0).length },
+            { label: "Sources", value: [...new Set(localResults.flatMap(r => r.dataFoundIn ?? []))].length || "—" },
           ].map(stat => (
             <div key={stat.label} className="bg-card border border-border rounded-lg p-4">
               <p className="text-xs text-muted-foreground mb-1">{stat.label}</p>
@@ -191,15 +191,24 @@ export default function RunResultsPage() {
                     </p>
                   </div>
 
-                  {/* Velocity */}
-                  <div className="shrink-0 w-24 order-3">
-                    <VelocityBadge velocity={result.velocityCategory} />
-                    <p className="text-xs text-muted-foreground mt-1">~{result.velocityDaysEstimate}d</p>
+                  {/* Data found in */}
+                  <div className="shrink-0 order-3 max-w-[140px] sm:max-w-none">
+                    {(result.dataFoundIn?.length ?? 0) > 0 ? (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Database className="w-3.5 h-3.5 text-primary shrink-0" />
+                        <span className="truncate" title={result.dataFoundIn.join(", ")}>
+                          {result.dataFoundIn.join(", ")}
+                        </span>
+                      </div>
+                    ) : result.velocityCategory != null ? (
+                      <div className="text-xs text-muted-foreground">Legacy run</div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">No data</div>
+                    )}
                   </div>
 
-                  {/* Confidence + Expand */}
-                  <div className="flex items-center gap-2 shrink-0 order-4 ml-auto sm:ml-0">
-                    <ConfidenceRing score={result.confidenceScore} />
+                  {/* Expand */}
+                  <div className="flex items-center shrink-0 order-4 ml-auto sm:ml-0">
                     <button
                       onClick={() => toggleExpand(device.id)}
                       className="text-muted-foreground hover:text-foreground transition-colors p-1"
@@ -212,10 +221,10 @@ export default function RunResultsPage() {
                 {/* Expanded detail */}
                 {isOpen && (
                   <div className="border-t border-border px-4 sm:px-5 py-4 sm:py-5 space-y-5">
-                    {/* Market signals */}
+                    {/* Market signals — data first (summary cards) */}
                     {result.marketSignals.length > 0 && (
                       <div>
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Market Signals</p>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Market data</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                           {result.marketSignals.map(sig => {
                             const isSalePrice = sig.source.includes("Cashify") || sig.source.includes("Ovantica") || sig.source.includes("Refit")
@@ -245,19 +254,63 @@ export default function RunResultsPage() {
                             )
                           })}
                         </div>
+                        {/* Live source URLs in a dropdown — expand to see iframes */}
+                        <Collapsible defaultOpen={false} className="mt-4">
+                          <CollapsibleTrigger className="flex items-center gap-2 text-xs font-medium text-primary hover:underline data-[state=open]:[&>svg:last-child]:rotate-180">
+                            <Globe className="w-3.5 h-3.5" />
+                            View live source pages
+                            <ChevronDown className="w-3.5 h-3.5 shrink-0 transition-transform duration-200" />
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <p className="text-[11px] text-muted-foreground mt-2 mb-3">
+                              Live view of source pages. If a frame is blank, the site may block embedding — use &quot;Open in new tab&quot; below each.
+                            </p>
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                              {result.marketSignals
+                                .filter(sig => sig.url)
+                                .map((sig, i) => (
+                                  <div key={`${sig.source}-${i}`} className="rounded-lg border border-border overflow-hidden bg-muted/30">
+                                    <p className="text-[10px] text-muted-foreground px-2 py-1.5 bg-muted/50 truncate" title={sig.url}>
+                                      {sig.source}
+                                    </p>
+                                    <iframe
+                                      src={sig.url}
+                                      title={`${sig.source} – ${device.model}`}
+                                      className="w-full h-[280px] min-h-[200px] border-0 bg-background"
+                                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                                      allow="fullscreen"
+                                    />
+                                    <a
+                                      href={sig.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline px-2 py-1.5"
+                                    >
+                                      Open in new tab <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  </div>
+                                ))}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </div>
                     )}
 
-                    {/* Explanations */}
-                    <div className="grid md:grid-cols-2 gap-4">
+                    {/* Explanation + Data sources */}
+                    <div className="space-y-4">
                       <div className="bg-muted/50 rounded-lg p-4">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pricing Rationale</p>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pricing rationale</p>
                         <p className="text-sm text-foreground leading-relaxed">{result.pricingExplanation}</p>
                       </div>
-                      <div className="bg-muted/50 rounded-lg p-4">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Velocity Rationale</p>
-                        <p className="text-sm text-foreground leading-relaxed">{result.velocityExplanation}</p>
-                      </div>
+                      {(result.dataFoundIn?.length ?? 0) > 0 && (
+                        <div className="flex items-start gap-2 text-sm text-muted-foreground">
+                          <Database className="w-4 h-4 shrink-0 mt-0.5" />
+                          <p>
+                            <span className="font-medium text-foreground">Data found in: </span>
+                            {result.dataFoundIn!.join(", ")}.
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Risk flags */}
@@ -294,13 +347,13 @@ export default function RunResultsPage() {
                             />
                           </div>
                           <div>
-                            <label className="text-xs text-muted-foreground mb-1 block">Velocity Override</label>
+                            <label className="text-xs text-muted-foreground mb-1 block">Velocity override (optional)</label>
                             <Select
                               value={result.humanVelocityOverride ?? ""}
                               onValueChange={v => updateFeedback(device.id, "humanVelocityOverride", v as VelocityCategory)}
                             >
                               <SelectTrigger className="h-8 text-xs">
-                                <SelectValue placeholder={result.velocityCategory} />
+                                <SelectValue placeholder={result.velocityCategory ?? "—"} />
                               </SelectTrigger>
                               <SelectContent>
                                 {["Fast", "Medium", "Slow"].map(v => (
