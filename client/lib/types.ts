@@ -131,13 +131,15 @@ export interface ScrapeResultsResponse {
 // Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
 export interface AnalyzeDevicesStartResponse {
   job_id: string
-  live_urls: string[]
+  /** 3 URLs per device: [Ovantica, ReFit Global, Cashify]. One entry per device. */
+  live_urls_by_device: string[][]
 }
 
 export interface AnalyzeDevicesStatusResponse {
   job_id: string
   status: "running" | "finished" | "error"
-  live_urls?: string[]
+  /** 3 URLs per device when running. */
+  live_urls_by_device?: string[][]
   error?: string
   results?: Array<{
     id: string

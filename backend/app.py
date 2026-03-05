@@ -665,7 +665,7 @@ def _run_bedrock_only(
 
 
 async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequestItem]) -> None:
-    """Background task: scrape (already have sessions in job), then Bedrock per device; store results."""
+    """Background task: scrape per device (each has 3 sessions), merge results, then Bedrock per device; store results."""
     job = _analyze_devices_jobs.get(job_id)
     if not job or job.get("status") != "running":
         return
@@ -674,29 +674,42 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
         job["status"] = "error"
         job["error"] = "BrowserUse client not available"
         return
-    prompts = _browser_prompts_for_query(" ".join(x for x in [devices[0].brand, devices[0].model] if x))
-    session_ids = job.get("session_ids", [])
-    if len(session_ids) != 3:
+    session_ids_by_device = job.get("session_ids_by_device", [])
+    if len(session_ids_by_device) != len(devices):
         job["status"] = "error"
-        job["error"] = "Missing session_ids"
+        job["error"] = "Session count does not match device count"
         return
+    # Run scrape for all devices in parallel so each device's sessions get used immediately (iframes stay live).
+    merged_results: dict[str, list[BrowserScrapeDevice]] = {src: [] for src in _BROWSER_SOURCES}
+
+    async def scrape_one_device(dev_idx: int, d: AnalyzeDevicesRequestItem) -> dict[str, list[BrowserScrapeDevice]]:
+        session_ids = session_ids_by_device[dev_idx]
+        if len(session_ids) != NUM_BROWSER_SESSIONS:
+            raise ValueError(f"Device {dev_idx + 1}: expected {NUM_BROWSER_SESSIONS} session ids")
+        query = " ".join(x for x in [d.brand, d.model] if x)
+        prompts = _browser_prompts_for_query(query)
+        return await _run_browser_scrape_tasks(client, prompts, session_ids)
+
     try:
-        results_dict = await _run_browser_scrape_tasks(client, prompts, session_ids)
+        device_tasks = [scrape_one_device(dev_idx, d) for dev_idx, d in enumerate(devices)]
+        device_results_list = await asyncio.gather(*device_tasks, return_exceptions=True)
+        for dev_idx, result in enumerate(device_results_list):
+            if isinstance(result, Exception):
+                logger.exception("Analyze-devices job %s device %d scrape failed: %s", job_id, dev_idx + 1, result)
+                job["status"] = "error"
+                job["error"] = f"Device {dev_idx + 1} scrape failed: {result}"
+                return
+            for src in _BROWSER_SOURCES:
+                merged_results[src].extend(result.get(src) or [])
     except Exception as e:
         logger.exception("Analyze-devices job %s scrape failed: %s", job_id, e)
         job["status"] = "error"
         job["error"] = str(e)
         return
-    encoded = urllib.parse.quote_plus(" ".join(x for x in [devices[0].brand, devices[0].model] if x))
-    source_urls = [
-        {"source": "ovantica", "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(devices[0].model)}"},
-        {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={encoded}"},
-        {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={encoded}"},
-    ]
     # Per-source results for frontend tables (ovantica, refitglobal, cashify -> list of dicts)
     scrape_results = {}
     for src in _BROWSER_SOURCES:
-        items = results_dict.get(src) or []
+        items = merged_results.get(src) or []
         scrape_results[src] = [x.model_dump() if hasattr(x, "model_dump") else (x if isinstance(x, dict) else {}) for x in items]
 
     job["scrape_results"] = scrape_results
@@ -704,7 +717,7 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
     # Full scraped table for Bedrock: each row has Storage, Model, Ram, Color, Condition, Price, source
     scraped_for_bedrock = []
     for src in _BROWSER_SOURCES:
-        for x in results_dict.get(src) or []:
+        for x in merged_results.get(src) or []:
             row = x.model_dump() if hasattr(x, "model_dump") else (x if isinstance(x, dict) else {})
             if isinstance(row, dict):
                 row = dict(row)
@@ -717,8 +730,14 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
             f"Device Input:\nBrand: {d.brand}\nModel: {d.model}\nStorage: {d.storage_gb}GB\n"
             f"RAM: {d.ram_gb}GB\nNetwork: {d.network_type}\nCondition: {d.condition_tier}\nWarranty: {d.warranty_months} months\n"
         )
+        encoded = urllib.parse.quote_plus(" ".join(x for x in [d.brand, d.model] if x))
+        device_source_urls = [
+            {"source": "ovantica", "url": f"https://ovantica.com/catalogsearch/result?q={urllib.parse.quote(d.model)}"},
+            {"source": "refitglobal", "url": f"https://refitglobal.com/search?q={encoded}"},
+            {"source": "cashify", "url": f"https://www.cashify.in/buy-refurbished-gadgets/all-gadgets/search?q={encoded}"},
+        ]
         price, explanation, flags, source_url, surl_list, data_found_in = _run_bedrock_only(
-            idx, query_string, scraped_for_bedrock, source_urls
+            idx, query_string, scraped_for_bedrock, device_source_urls
         )
         results.append(AnalyzeDevicesResponseItem(
             id=d.id,
@@ -814,7 +833,7 @@ async def analyze_csv(file: UploadFile = File(...)) -> StreamingResponse:
 
 @app.post("/analyze-devices/start")
 async def analyze_devices_start(req: AnalyzeDevicesRequest) -> dict[str, Any]:
-    """Start an async analyze-devices job. Returns job_id and live_urls for iframes. Poll GET /analyze-devices/status/{job_id} for results."""
+    """Start an async analyze-devices job. Returns job_id and live_urls_by_device (3 URLs per device). Poll GET /analyze-devices/status/{job_id} for results."""
     client = _get_browser_use_client()
     if not client:
         raise HTTPException(
@@ -822,26 +841,30 @@ async def analyze_devices_start(req: AnalyzeDevicesRequest) -> dict[str, Any]:
             detail="Browser scraper not available. Set BROWSER_USE_API_KEY to enable.",
         )
     job_id = str(uuid.uuid4())
-    prompts = _browser_prompts_for_query(" ".join(x for x in [req.devices[0].brand, req.devices[0].model] if x))
-    session_ids = []
-    live_urls = []
-    for _ in prompts:
-        try:
-            session = await client.sessions.create()
-            session_ids.append(session.id)
-            live_urls.append(session.live_url)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to create browser session: {e}") from e
+    session_ids_by_device: list[list[str]] = []
+    live_urls_by_device: list[list[str]] = []
+    for _ in req.devices:
+        device_session_ids = []
+        device_live_urls = []
+        for _ in range(NUM_BROWSER_SESSIONS):
+            try:
+                session = await client.sessions.create()
+                device_session_ids.append(session.id)
+                device_live_urls.append(session.live_url)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Failed to create browser session: {e}") from e
+        session_ids_by_device.append(device_session_ids)
+        live_urls_by_device.append(device_live_urls)
     _analyze_devices_jobs[job_id] = {
         "status": "running",
-        "live_urls": live_urls,
-        "session_ids": session_ids,
+        "live_urls_by_device": live_urls_by_device,
+        "session_ids_by_device": session_ids_by_device,
         "results": None,
         "scrape_results": None,
         "error": None,
     }
     asyncio.create_task(_run_analyze_devices_job(job_id, req.devices))
-    return {"job_id": job_id, "live_urls": live_urls}
+    return {"job_id": job_id, "live_urls_by_device": live_urls_by_device}
 
 
 @app.get("/analyze-devices/status/{job_id}")
@@ -851,8 +874,8 @@ async def analyze_devices_status(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     out = {"job_id": job_id, "status": job["status"]}
-    if job.get("live_urls"):
-        out["live_urls"] = job["live_urls"]
+    if job.get("live_urls_by_device"):
+        out["live_urls_by_device"] = job["live_urls_by_device"]
     if job.get("error"):
         out["error"] = job["error"]
     if job.get("results") is not None:

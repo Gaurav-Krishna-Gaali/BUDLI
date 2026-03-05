@@ -23,7 +23,7 @@ const WORKFLOW_STEPS = [
   { step: "06", title: "Feedback to KB", desc: "Approved decisions are stored — future runs learn from this history." },
 ]
 
-const POLL_INTERVAL_MS = 2500
+const POLL_INTERVAL_MS = 15_000 // 15 seconds
 
 export default function DashboardPage() {
   const [runs, setRuns] = useState<Run[]>([])
