@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { Plus, Trash2, CheckCircle2, Clock, ChevronRight, FileText } from "lucide-react"
+import { Plus, Trash2, CheckCircle2, Clock, ChevronRight, FileText, Database } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, deleteRun } from "@/lib/store"
-import { VelocityBadge } from "@/components/velocity-badge"
 import type { Run } from "@/lib/types"
 
 export default function HistoryPage() {
@@ -25,10 +24,10 @@ export default function HistoryPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-balance">Run History</h1>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-balance">Run History</h1>
             <p className="text-sm text-muted-foreground mt-1">
               All pricing runs — click a run to view results and submit feedback.
             </p>
@@ -59,7 +58,7 @@ export default function HistoryPage() {
               const avgPrice = run.results.length
                 ? Math.round(run.results.reduce((s, r) => s + r.recommendedPrice, 0) / run.results.length)
                 : 0
-              const fastCount = run.results.filter(r => r.velocityCategory === "Fast").length
+              const withDataCount = run.results.filter(r => (r.dataFoundIn?.length ?? 0) > 0).length
 
               return (
                 <Link
@@ -67,9 +66,9 @@ export default function HistoryPage() {
                   href={`/runs/${run.id}`}
                   className="block bg-card border border-border rounded-lg hover:border-primary/40 hover:shadow-sm transition-all"
                 >
-                  <div className="flex items-center gap-4 px-5 py-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 px-4 sm:px-5 py-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
+                      <div className="flex flex-wrap items-center gap-2 mb-0.5">
                         <p className="font-semibold text-foreground truncate">{run.name}</p>
                         {run.feedbackSubmitted && (
                           <span className="shrink-0 inline-flex items-center gap-1 text-xs text-primary font-medium">
@@ -84,7 +83,7 @@ export default function HistoryPage() {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-6 shrink-0">
+                    <div className="flex flex-wrap items-center gap-4 sm:gap-6 shrink-0">
                       <div className="text-center">
                         <p className="text-xs text-muted-foreground">Devices</p>
                         <p className="text-sm font-semibold">{run.devices.length}</p>
@@ -94,9 +93,16 @@ export default function HistoryPage() {
                         <p className="text-sm font-semibold text-primary">{run.results.length ? formatINR(avgPrice) : "—"}</p>
                       </div>
                       <div className="text-center">
-                        <p className="text-xs text-muted-foreground">Fast Movers</p>
-                        <div className="flex justify-center mt-0.5">
-                          {fastCount > 0 ? <VelocityBadge velocity="Fast" size="sm" /> : <span className="text-sm font-semibold">—</span>}
+                        <p className="text-xs text-muted-foreground">With data</p>
+                        <div className="flex justify-center items-center gap-1 mt-0.5">
+                          {withDataCount > 0 ? (
+                            <>
+                              <Database className="w-3.5 h-3.5 text-primary" />
+                              <span className="text-sm font-semibold">{withDataCount}</span>
+                            </>
+                          ) : (
+                            <span className="text-sm font-semibold">—</span>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">

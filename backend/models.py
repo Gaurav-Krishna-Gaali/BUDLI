@@ -15,6 +15,7 @@ class RunModel(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     devices = Column(JSONB, default=list) # Array of DeviceInput objects
     results = Column(JSONB, default=list) # Array of PricingResult objects
+    scrape_results = Column(JSONB, default=dict, nullable=True)  # Per-source tables: ovantica, refitglobal, cashify -> list of rows
     feedback_submitted = Column(Boolean, default=False)
 
 class KnowledgeBaseEntryModel(Base):

@@ -1,18 +1,16 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { BarChart2, TrendingUp, Activity, Target } from "lucide-react"
+import { BarChart2, TrendingUp, Target, Database } from "lucide-react"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, getKBEntries } from "@/lib/store"
 import type { Run, KnowledgeBaseEntry } from "@/lib/types"
-import { VelocityBadge } from "@/components/velocity-badge"
 
 interface BrandStat {
   brand: string
   count: number
   avgPrice: number
-  avgConfidence: number
-  fastCount: number
+  withDataCount: number
 }
 
 export default function AnalyticsPage() {
@@ -29,41 +27,44 @@ export default function AnalyticsPage() {
 
   const totalDevices = allDevices.length
   const avgPrice = allResults.length ? Math.round(allResults.reduce((s, r) => s + r.recommendedPrice, 0) / allResults.length) : 0
-  const avgConfidence = allResults.length ? Math.round(allResults.reduce((s, r) => s + r.confidenceScore, 0) / allResults.length) : 0
+  const withDataCount = allResults.filter(r => (r.dataFoundIn?.length ?? 0) > 0).length
   const acceptanceRate = entries.length
     ? Math.round((entries.filter(e => Math.abs(e.delta) <= 1000).length / entries.length) * 100)
     : 0
 
   // Brand breakdown
-  const brandMap = new Map<string, { prices: number[]; confidence: number[]; fast: number }>()
+  const brandMap = new Map<string, { prices: number[]; withData: number }>()
   allDevices.forEach(d => {
     const result = allResults.find(r => r.deviceId === d.id)
     if (!result) return
-    const existing = brandMap.get(d.brand) ?? { prices: [], confidence: [], fast: 0 }
+    const key = d.model || "Unknown"
+    const existing = brandMap.get(key) ?? { prices: [], withData: 0 }
     existing.prices.push(result.recommendedPrice)
-    existing.confidence.push(result.confidenceScore)
-    if (result.velocityCategory === "Fast") existing.fast++
-    brandMap.set(d.brand, existing)
+    if ((result.dataFoundIn?.length ?? 0) > 0) existing.withData++
+    brandMap.set(key, existing)
   })
   const brandStats: BrandStat[] = Array.from(brandMap.entries()).map(([brand, val]) => ({
     brand,
     count: val.prices.length,
     avgPrice: Math.round(val.prices.reduce((a, b) => a + b, 0) / val.prices.length),
-    avgConfidence: Math.round(val.confidence.reduce((a, b) => a + b, 0) / val.confidence.length),
-    fastCount: val.fast,
+    withDataCount: val.withData,
   })).sort((a, b) => b.count - a.count)
 
   // Condition distribution
   const conditionMap = new Map<string, number>()
   allDevices.forEach(d => {
-    conditionMap.set(d.conditionTier, (conditionMap.get(d.conditionTier) ?? 0) + 1)
+    conditionMap.set(d.condition, (conditionMap.get(d.condition) ?? 0) + 1)
   })
 
-  // Velocity distribution
-  const velocityMap = new Map<string, number>()
+  // Source coverage: how many devices had data from each source
+  const sourceCounts = new Map<string, number>()
   allResults.forEach(r => {
-    velocityMap.set(r.velocityCategory, (velocityMap.get(r.velocityCategory) ?? 0) + 1)
+    (r.dataFoundIn ?? []).forEach(src => {
+      sourceCounts.set(src, (sourceCounts.get(src) ?? 0) + 1)
+    })
   })
+  const sourceOrder = ["Ovantica", "ReFit Global", "Cashify"]
+  const sourceStats = sourceOrder.filter(s => sourceCounts.has(s)).map(s => ({ name: s, count: sourceCounts.get(s) ?? 0 }))
 
   // Price adjustment trend (KB)
   const avgDelta = entries.length
@@ -76,9 +77,9 @@ export default function AnalyticsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-5xl mx-auto px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-balance">Analytics</h1>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="mb-6 sm:mb-8">
+          <h1 className="text-xl sm:text-2xl font-bold text-balance">Analytics</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Aggregate insights across all pricing runs and knowledge base entries.
           </p>
@@ -97,7 +98,7 @@ export default function AnalyticsPage() {
               {[
                 { label: "Total Devices Priced", value: totalDevices, icon: Target, sub: `Across ${runs.length} run${runs.length !== 1 ? "s" : ""}` },
                 { label: "Avg Recommended Price", value: formatINR(avgPrice), icon: TrendingUp, sub: "All devices & conditions" },
-                { label: "Avg AI Confidence", value: `${avgConfidence}%`, icon: Activity, sub: "Across all recommendations" },
+                { label: "Devices with data", value: withDataCount, icon: Database, sub: "Had scraped listings from sources" },
                 { label: "KB Acceptance Rate", value: entries.length ? `${acceptanceRate}%` : "—", icon: BarChart2, sub: entries.length ? `${entries.length} reviewed` : "No feedback yet" },
               ].map(kpi => (
                 <div key={kpi.label} className="bg-card border border-border rounded-lg p-4">
@@ -111,24 +112,27 @@ export default function AnalyticsPage() {
               ))}
             </div>
 
-            {/* Velocity distribution */}
+            {/* Source coverage + Condition */}
             <div className="grid md:grid-cols-2 gap-6">
               <div className="bg-card border border-border rounded-lg p-5">
-                <h3 className="text-sm font-semibold mb-4">Velocity Distribution</h3>
-                {(["Fast", "Medium", "Slow"] as const).map(v => {
-                  const count = velocityMap.get(v) ?? 0
-                  const pct = allResults.length ? Math.round((count / allResults.length) * 100) : 0
-                  const barColor = v === "Fast" ? "bg-primary" : v === "Medium" ? "bg-accent" : "bg-destructive"
-                  return (
-                    <div key={v} className="flex items-center gap-3 mb-3">
-                      <VelocityBadge velocity={v} size="sm" />
-                      <div className="flex-1 bg-muted rounded-full h-2">
-                        <div className={`${barColor} h-2 rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                <h3 className="text-sm font-semibold mb-4">Data source coverage</h3>
+                <p className="text-xs text-muted-foreground mb-3">Devices that had listings from each source</p>
+                {sourceStats.length > 0 ? (
+                  sourceStats.map(({ name, count }) => {
+                    const pct = allResults.length ? Math.round((count / allResults.length) * 100) : 0
+                    return (
+                      <div key={name} className="flex items-center gap-3 mb-3">
+                        <span className="text-xs font-medium w-28 shrink-0">{name}</span>
+                        <div className="flex-1 bg-muted rounded-full h-2">
+                          <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs text-muted-foreground w-14 text-right">{count} ({pct}%)</span>
                       </div>
-                      <span className="text-xs text-muted-foreground w-10 text-right">{count} ({pct}%)</span>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                ) : (
+                  <p className="text-xs text-muted-foreground">No source data in runs yet.</p>
+                )}
               </div>
 
               <div className="bg-card border border-border rounded-lg p-5">
@@ -153,13 +157,14 @@ export default function AnalyticsPage() {
             {/* Brand breakdown */}
             {brandStats.length > 0 && (
               <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="px-5 py-4 border-b border-border">
-                  <h3 className="text-sm font-semibold">Brand Breakdown</h3>
+                <div className="px-4 sm:px-5 py-4 border-b border-border">
+                  <h3 className="text-sm font-semibold">Model breakdown</h3>
                 </div>
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[400px]">
                   <thead>
                     <tr className="border-b border-border">
-                      {["Brand", "Devices", "Avg Price", "Avg Confidence", "Fast Movers"].map(h => (
+                      {["Model", "Devices", "Avg Price", "With data"].map(h => (
                         <th key={h} className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide px-5 py-3">{h}</th>
                       ))}
                     </tr>
@@ -171,26 +176,20 @@ export default function AnalyticsPage() {
                         <td className="px-5 py-3 text-muted-foreground">{stat.count}</td>
                         <td className="px-5 py-3 text-primary font-medium">{formatINR(stat.avgPrice)}</td>
                         <td className="px-5 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-muted rounded-full h-1.5 w-16">
-                              <div
-                                className="bg-primary h-1.5 rounded-full"
-                                style={{ width: `${stat.avgConfidence}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground">{stat.avgConfidence}%</span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-3">
-                          {stat.fastCount > 0
-                            ? <VelocityBadge velocity="Fast" size="sm" />
-                            : <span className="text-xs text-muted-foreground">—</span>
-                          }
+                          {stat.withDataCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs">
+                              <Database className="w-3.5 h-3.5 text-primary" />
+                              {stat.withDataCount}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
 

@@ -1,18 +1,18 @@
-export type ConditionTier = "Like New" | "Excellent" | "Good" | "Fair"
+export type ConditionTier = "Like New" | "Excellent" | "Good" | "Fair" | "superb" | "fair" | "good"
+/** Condition for device form/CSV (aligned with main.py schema) */
+export type Condition = "superb" | "fair" | "good"
 export type NetworkType = "5G" | "4G" | "3G"
 export type VelocityCategory = "Fast" | "Medium" | "Slow"
 export type RunStatus = "pending" | "processing" | "completed" | "error"
 
+/** Device input: Storage, Model, Ram, Color, Condition (aligned with main.py) */
 export interface DeviceInput {
   id: string
-  brand: string
+  storage: string
   model: string
   ram: string
-  storage: string
-  networkType: NetworkType
-  conditionTier: ConditionTier
-  warrantyMonths: number
-  customerSamplePrice?: number
+  color: string
+  condition: Condition
 }
 
 export interface MarketSignal {
@@ -23,31 +23,25 @@ export interface MarketSignal {
   scrapedAt: string
 }
 
-export interface DemandSignal {
-  demand_index?: number       // 0-1 composite score
-  demand_label?: string       // Very High / High / Medium / Low / Very Low
-  growth_rate?: number        // (recent - prev) / prev
-  acceleration?: number       // slope pts/week
-  direction?: string          // increasing / flat / decreasing
-  recent_4w_avg?: number      // 0-100
-  prev_4w_avg?: number
-  latest?: number
-}
-
 export interface PricingResult {
   deviceId: string
   recommendedPrice: number
   priceLow: number
   priceHigh: number
-  confidenceScore: number // 0-100
-  velocityCategory: VelocityCategory
-  velocityDaysEstimate: number
+  /** Sources that had scraped data (e.g. ["Ovantica", "ReFit Global", "Cashify"]) */
+  dataFoundIn?: string[]
+  /** @deprecated Backend no longer returns; kept for old runs */
+  confidenceScore?: number
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityCategory?: VelocityCategory
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityDaysEstimate?: number
   pricingExplanation: string
-  velocityExplanation: string
+  /** @deprecated Backend no longer returns; kept for old runs */
+  velocityExplanation?: string
   riskFlags: string[]
   marketSignals: MarketSignal[]
   sourceUrl?: string
-  demandSignal?: DemandSignal   // Demand signal from Google Trends
   // Human review fields
   humanApprovedPrice?: number
   humanVelocityOverride?: VelocityCategory
@@ -64,6 +58,8 @@ export interface Run {
   completedAt?: string
   devices: DeviceInput[]
   results: PricingResult[]
+  /** Per-source scrape tables (ovantica, refitglobal, cashify -> list of rows). Stored in DB, shown on run detail. */
+  scrapeResults?: Record<string, BrowserScrapeRow[]> | null
   feedbackSubmitted: boolean
 }
 
@@ -89,4 +85,68 @@ export interface KBPattern {
   avgDelta: number
   occurrences: number
   insight: string
+}
+
+// Browser scrape job (POST /scrape/start, GET /scrape/results/{job_id})
+export interface ScrapeStartResponse {
+  job_id: string
+  live_urls: string[]
+  query: string
+}
+
+export interface ScrapedDeviceItem {
+  name?: string | null
+  price?: string | null
+  link?: string | null
+  source?: string | null
+  storage?: string | null
+  original_price?: string | null
+  effective_price?: string | null
+  discount_pct?: string | null
+  rating?: string | null
+  image?: string | null
+}
+
+/** Per-row shape from browser scrape (per source). */
+export interface BrowserScrapeRow {
+  Storage?: string
+  Model?: string
+  Ram?: string
+  Color?: string
+  Condition?: string
+  Price?: string
+}
+
+export interface ScrapeResultsResponse {
+  job_id: string
+  status: "running" | "finished" | "error"
+  query?: string
+  error?: string
+  /** Per-source results: ovantica, refitglobal, cashify -> list of rows */
+  results?: Record<string, BrowserScrapeRow[]>
+  devices?: ScrapedDeviceItem[]
+  count?: number
+}
+
+// Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
+export interface AnalyzeDevicesStartResponse {
+  job_id: string
+  live_urls: string[]
+}
+
+export interface AnalyzeDevicesStatusResponse {
+  job_id: string
+  status: "running" | "finished" | "error"
+  live_urls?: string[]
+  error?: string
+  results?: Array<{
+    id: string
+    predicted_price?: string
+    explanation?: string
+    risk_flags?: string[]
+    data_found_in?: string[]
+    source_url?: string
+    source_urls?: Array<{ source: string; url: string }>
+  }>
+  scrape_results?: Record<string, BrowserScrapeRow[]>
 }

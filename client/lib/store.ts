@@ -119,10 +119,9 @@ export function parseCSV(text: string): Record<string, string>[] {
 
 export function generateOutputCSV(run: Run): string {
   const headers = [
-    "brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months",
-    "recommended_price", "predicted_price", "price_high", "confidence",
-    "velocity", "velocity_days",
-    "explanation", "velocity_explanation", "risk_flags",
+    "Storage", "Model", "Ram", "Color", "Condition",
+    "recommended_price", "predicted_price", "price_high",
+    "data_found_in", "explanation", "risk_flags",
     "human_approved_price", "human_velocity_override", "feedback_note", "accepted", "source_url"
   ]
 
@@ -131,22 +130,17 @@ export function generateOutputCSV(run: Run): string {
     if (!result) return Array(headers.length).fill("").join(",")
 
     const row = [
-      device.brand,
+      device.storage,
       device.model,
       device.ram,
-      device.storage,
-      device.networkType,
-      device.conditionTier,
-      device.warrantyMonths.toString(),
+      device.color,
+      device.condition,
       result.recommendedPrice.toString(),
-      result.priceLow.toString(), // predicted_price/low
+      result.priceLow.toString(),
       result.priceHigh.toString(),
-      result.confidenceScore.toString(),
-      result.velocityCategory,
-      result.velocityDaysEstimate.toString(),
-      `"${result.pricingExplanation.replace(/"/g, "'")}"`,
-      `"${result.velocityExplanation.replace(/"/g, "'")}"`,
-      `"${result.riskFlags.join("; ").replace(/"/g, "'")}"`,
+      (result.dataFoundIn ?? []).join("; "),
+      `"${(result.pricingExplanation ?? "").replace(/"/g, "'")}"`,
+      `"${(result.riskFlags ?? []).join("; ").replace(/"/g, "'")}"`,
       result.humanApprovedPrice?.toString() ?? "",
       result.humanVelocityOverride ?? "",
       result.humanFeedbackNote ?? "",
@@ -160,11 +154,11 @@ export function generateOutputCSV(run: Run): string {
 }
 
 export function generateInputTemplateCSV(): string {
-  const headers = ["brand", "model", "ram_gb", "storage_gb", "network_type", "condition_tier", "warranty_months"]
+  const headers = ["Storage", "Model", "Ram", "Color", "Condition"]
   const examples = [
-    ["Apple", "iPhone 16", "4", "128", "5G", "Good", "6"],
-    ["Apple", "iPhone 12", "4", "64", "5G", "Fair", "3"],
-    ["Samsung", "Galaxy S21", "8", "128", "5G", "Good", "6"],
+    ["128", "iPhone 16", "6", "Black", "good"],
+    ["64", "iPhone 12", "4", "Blue", "fair"],
+    ["128", "Galaxy S21", "8", "Phantom Black", "superb"],
   ]
   return [headers.join(","), ...examples.map(r => r.join(","))].join("\n")
 }

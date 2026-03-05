@@ -13,11 +13,11 @@ const NAV_ITEMS = [
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
 ]
 
-export function SidebarNav() {
+export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
 
   return (
-    <aside className="w-60 min-h-screen bg-sidebar flex flex-col shrink-0">
+    <aside className="w-full md:w-60 min-h-screen md:h-full bg-sidebar flex flex-col shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-sidebar-border">
         <div className="bg-white rounded-md px-2 py-1.5 flex items-center justify-center">
@@ -47,6 +47,7 @@ export function SidebarNav() {
             <Link
               key={href}
               href={href}
+              onClick={onNavigate}
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors",
                 active
