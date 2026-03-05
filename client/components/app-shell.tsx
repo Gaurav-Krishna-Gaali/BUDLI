@@ -15,8 +15,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex md:w-60 md:shrink-0 md:flex-col">
+      {/* Desktop sidebar — full viewport height, sticky so it stays full length */}
+      <aside className="hidden md:flex md:w-60 md:shrink-0 md:flex-col md:h-screen md:sticky md:top-0 md:overflow-y-auto">
         <SidebarNav />
       </aside>
 

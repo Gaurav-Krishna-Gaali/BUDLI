@@ -17,7 +17,7 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname()
 
   return (
-    <aside className="w-full md:w-60 min-h-screen md:min-h-0 bg-sidebar flex flex-col shrink-0">
+    <aside className="w-full md:w-60 min-h-screen md:h-full bg-sidebar flex flex-col shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-sidebar-border">
         <div className="bg-white rounded-md px-2 py-1.5 flex items-center justify-center">
