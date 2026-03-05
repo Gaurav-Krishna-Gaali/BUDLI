@@ -1,11 +1,13 @@
 from typing import Any, Optional
 
+import asyncio
 import csv
-import os
 import io
 import json
 import logging
+import os
 import urllib.parse
+import uuid
 from datetime import datetime
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Depends
@@ -20,6 +22,22 @@ from dotenv import load_dotenv
 from bedrock_helper import analyze_with_bedrock
 from script import scrape_device_data, scrape_refit_data, scrape_cashify_data
 from trends_helper import fetch_trend_metrics
+
+# Optional BrowserUse SDK for /scrape/start + /scrape/results/{job_id}
+_browser_use_client: Any = None
+
+def _get_browser_use_client():
+    global _browser_use_client
+    if _browser_use_client is None and os.environ.get("BROWSER_USE_API_KEY"):
+        try:
+            from browser_use_sdk import AsyncBrowserUse  # type: ignore[import-untyped]
+            _browser_use_client = AsyncBrowserUse()
+        except Exception:
+            pass
+    return _browser_use_client
+
+# In-memory job store for browser scrape jobs (per process)
+_browser_scrape_jobs: dict[str, dict[str, Any]] = {}
 
 
 def _best_effort_utf8_stdio() -> None:
@@ -88,6 +106,84 @@ class ScrapeResponse(BaseModel):
     devices: list[Device]
 
 
+# --- BrowserUse scraper (from main.py) ---
+class BrowserScrapeDevice(BaseModel):
+    """Schema returned by BrowserUse per device."""
+    Storage: str = ""
+    Model: str = ""
+    Ram: str = ""
+    Color: str = ""
+    Condition: str = ""
+    Price: str = ""
+
+
+class BrowserScrapeDevicesList(BaseModel):
+    items: list[BrowserScrapeDevice]
+
+
+def _browser_prompts_for_query(query: str) -> list[str]:
+    """Build one prompt per source using the user's query."""
+    return [
+        f"Go to https://ovantica.com/ and find all the prices for second hand {query} with the different configs. Return a table of config and price and condition.",
+        f"Go to https://refitglobal.com/ and find all the prices for second hand {query} with the different configs. Return a table of config and price and condition.",
+        f"Go to https://www.cashify.in/ and find all the prices for second hand {query} with the different configs. Return a table of config and price and condition.",
+    ]
+
+
+def _browser_results_to_devices(results: dict[str, list[BrowserScrapeDevice]]) -> list[Device]:
+    """Map BrowserUse results (per source) to app's Device list."""
+    devices: list[Device] = []
+    for source, items in results.items():
+        for d in items or []:
+            name = d.Model or f"{d.Storage} {d.Color}".strip() or None
+            devices.append(
+                Device(
+                    name=name,
+                    price=d.Price or None,
+                    link=None,
+                    source=source,
+                    storage=d.Storage or None,
+                )
+            )
+    return devices
+
+
+async def _run_single_browser(client: Any, prompt: str, session_id: str) -> Any:
+    result = await client.run(
+        prompt,
+        session_id=session_id,
+        output_schema=BrowserScrapeDevicesList,
+    )
+    return result.output
+
+
+async def _run_browser_scrape(job_id: str, prompts: list[str], session_ids: list[str]) -> None:
+    client = _get_browser_use_client()
+    if not client:
+        _browser_scrape_jobs[job_id]["status"] = "error"
+        _browser_scrape_jobs[job_id]["error"] = "BrowserUse client not available"
+        return
+    tasks = [
+        asyncio.create_task(_run_single_browser(client, prompt, sid))
+        for prompt, sid in zip(prompts, session_ids)
+    ]
+    results_list = await asyncio.gather(*tasks, return_exceptions=True)
+    sources = ["ovantica", "refitglobal", "cashify"]
+    results: dict[str, list[BrowserScrapeDevice]] = {}
+    for source, result in zip(sources, results_list):
+        if isinstance(result, Exception):
+            logger.warning("Browser scrape %s failed: %s", source, result)
+            results[source] = []
+        else:
+            raw = getattr(result, "items", []) if result else []
+            results[source] = [
+                x if isinstance(x, BrowserScrapeDevice) else BrowserScrapeDevice(**(x or {}))
+                for x in raw
+            ]
+    _browser_scrape_jobs[job_id]["results"] = results
+    _browser_scrape_jobs[job_id]["status"] = "finished"
+
+
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., min_length=1)
     instructions: Optional[str] = Field(
@@ -136,6 +232,53 @@ def scrape(req: ScrapeRequest) -> ScrapeResponse:
         raise HTTPException(status_code=502, detail=f"Scrape failed: {e}") from e
 
     return ScrapeResponse(query=req.query, count=len(devices), devices=devices)
+
+
+@app.post("/scrape/start")
+async def scrape_start(req: ScrapeRequest) -> dict[str, Any]:
+    """Start a browser-based scrape (BrowserUse). Returns job_id and live_urls to poll /scrape/results/{job_id}."""
+    client = _get_browser_use_client()
+    if not client:
+        raise HTTPException(
+            status_code=503,
+            detail="Browser scraper not available. Set BROWSER_USE_API_KEY to enable.",
+        )
+    prompts = _browser_prompts_for_query(req.query)
+    job_id = str(uuid.uuid4())
+    sessions = []
+    live_urls = []
+    for _ in prompts:
+        try:
+            session = await client.sessions.create()
+            sessions.append(session.id)
+            live_urls.append(session.live_url)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to create browser session: {e}") from e
+    _browser_scrape_jobs[job_id] = {
+        "status": "running",
+        "results": None,
+        "query": req.query,
+    }
+    asyncio.create_task(_run_browser_scrape(job_id, prompts, sessions))
+    return {"job_id": job_id, "live_urls": live_urls, "query": req.query}
+
+
+@app.get("/scrape/results/{job_id}")
+async def scrape_results(job_id: str) -> dict[str, Any]:
+    """Get status and results for a browser scrape job started via POST /scrape/start."""
+    job = _browser_scrape_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    out = {"job_id": job_id, "status": job["status"], "query": job.get("query")}
+    if job.get("error"):
+        out["error"] = job["error"]
+    if job.get("results") is not None:
+        results = job["results"]
+        devices = _browser_results_to_devices(results)
+        out["results"] = results
+        out["devices"] = [d.model_dump() for d in devices]
+        out["count"] = len(devices)
+    return out
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
