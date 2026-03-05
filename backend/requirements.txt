@@ -9,3 +9,4 @@ serpapi
 google-search-results
 sqlalchemy
 psycopg2-binary
+browser-use-sdk
