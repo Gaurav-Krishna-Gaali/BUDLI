@@ -227,7 +227,7 @@ export default function RunResultsPage() {
                         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Market data</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                           {result.marketSignals.map(sig => {
-                            const isSalePrice = sig.source.includes("Cashify") || sig.source.includes("Ovantica") || sig.source.includes("Refit")
+                            const isSalePrice = sig.source.includes("Cashify") || sig.source.includes("Ovantica") || /refit/i.test(sig.source)
                             const isVelocity = sig.source.includes("Flipkart") || sig.source.includes("Amazon")
                             return (
                               <a
@@ -239,9 +239,9 @@ export default function RunResultsPage() {
                               >
                                 <div className="flex-1 min-w-0">
                                   <p className="font-medium text-foreground truncate">{sig.source}</p>
-                                  <p className="text-muted-foreground mt-0.5">
-                                    {isSalePrice ? formatINR(sig.price) : sig.condition}
-                                  </p>
+                                  {isVelocity && (
+                                    <p className="text-muted-foreground mt-0.5">{sig.condition}</p>
+                                  )}
                                   {isSalePrice && (
                                     <p className="text-muted-foreground/70 text-[10px] mt-0.5">Sale price ref.</p>
                                   )}
