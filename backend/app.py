@@ -661,8 +661,7 @@ def _scrape_flipkart_search(
     items: List[Dict[str, Optional[str]]] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=True)
-        
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
         page.goto(url, timeout=60000)
@@ -867,28 +866,20 @@ async def flipkart_scrape(req: VelocityScrapeRequest) -> FlipkartScrapeResponse:
     Uses requests + BeautifulSoup first; falls back to Playwright if bs4 returns no results.
     """
     loop = asyncio.get_running_loop()
-    items_raw = await loop.run_in_executor(
-        None,
-        _scrape_flipkart_search_bs4,
-        req.model,
-        req.ram,
-        req.storage,
-        req.color,
-        req.limit,
-    )
-    if not items_raw:
-        try:
-            items_raw = await loop.run_in_executor(
-                None,
-                _scrape_flipkart_search,
-                req.model,
-                req.ram,
-                req.storage,
-                req.color,
-                req.limit,
-            )
-        except Exception as e:
-            logger.warning("Flipkart Playwright fallback failed: %s", e)
+    # Temporarily disable bs4 scraper so we always trigger the Playwright fallback
+    items_raw: list[dict] = []
+    try:
+        items_raw = await loop.run_in_executor(
+            None,
+            _scrape_flipkart_search,
+            req.model,
+            req.ram,
+            req.storage,
+            req.color,
+            req.limit,
+        )
+    except Exception as e:
+        logger.warning("Flipkart Playwright fallback failed: %s", e)
 
     filter_query = (
         "Filter the following Flipkart search results for devices.\n"

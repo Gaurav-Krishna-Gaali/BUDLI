@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Optional: install Playwright browsers if you use in-container browser scraping
 # Uncomment the next 2 lines and add playwright to the apt-get above if needed:
 RUN playwright install chromium
+RUN playwright install chrome || true
 RUN playwright install-deps chromium || true
 
 COPY . .
