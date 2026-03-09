@@ -148,6 +148,19 @@ class VelocityScrapeResponse(BaseModel):
     non_matching: List[VelocityScrapeItem]
 
 
+class FlipkartScrapeItem(BaseModel):
+    title: Optional[str] = None
+    link: Optional[str] = None
+    price: Optional[str] = None
+    rating: Optional[str] = None
+
+
+class FlipkartScrapeResponse(BaseModel):
+    query: dict
+    results: List[FlipkartScrapeItem]
+    non_matching: List[FlipkartScrapeItem]
+
+
 # --- BrowserUse scraper ---
 class BrowserScrapeDevice(BaseModel):
     """Schema returned by BrowserUse per device."""
@@ -460,6 +473,68 @@ def _scrape_amazon_search(
     return items
 
 
+def _scrape_flipkart_search(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 10,
+) -> List[Dict[str, Optional[str]]]:
+    query = f"{model} {ram} {storage} {color}"
+    base_url = "https://www.flipkart.com/search?q="
+    url = base_url + query.replace(" ", "%20")
+
+    items: List[Dict[str, Optional[str]]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        page.goto(url, timeout=60000)
+        page.wait_for_load_state("networkidle")
+
+        products = page.locator("a[href*='/p/']")
+        count = min(products.count(), limit)
+
+        for i in range(count):
+            product = products.nth(i)
+
+            # Title
+            title = product.inner_text() if product else None
+
+            # Link
+            href = product.get_attribute("href") if product else None
+            link = "https://www.flipkart.com" + href if href else None
+
+            # Move to parent card
+            card = product.locator("xpath=ancestor::div[1]") if product else None
+
+            # Price
+            price = None
+            rating = None
+            if card:
+                price_el = card.locator("text=₹").first
+                if price_el.count() > 0:
+                    price = price_el.inner_text()
+
+                rating_el = card.locator("div:has-text('★')").first
+                if rating_el.count() > 0:
+                    rating = rating_el.inner_text()
+
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "price": price,
+                    "rating": rating,
+                }
+            )
+
+        browser.close()
+
+    return items
+
+
 @app.post("/velocity-scrape", response_model=VelocityScrapeResponse)
 async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
     """
@@ -543,6 +618,95 @@ async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
     non_matching_items = [VelocityScrapeItem(**item) for item in non_matching_raw]
 
     return VelocityScrapeResponse(
+        query={
+            "model": req.model,
+            "ram": req.ram,
+            "storage": req.storage,
+            "color": req.color,
+            "limit": req.limit,
+        },
+        results=items,
+        non_matching=non_matching_items,
+    )
+
+
+@app.post("/flipkart-scrape", response_model=FlipkartScrapeResponse)
+async def flipkart_scrape(req: VelocityScrapeRequest) -> FlipkartScrapeResponse:
+    """
+    Scrape Flipkart search results for a given device config and filter with Bedrock.
+    """
+    loop = asyncio.get_running_loop()
+    items_raw = await loop.run_in_executor(
+        None,
+        _scrape_flipkart_search,
+        req.model,
+        req.ram,
+        req.storage,
+        req.color,
+        req.limit,
+    )
+
+    filter_query = (
+        "Filter the following Flipkart search results for devices.\n"
+        "Return ONLY the items that clearly match this desired configuration:\n\n"
+        f"- Model: {req.model}\n"
+        f"- RAM: {req.ram}\n"
+        f"- Storage: {req.storage}\n"
+        f"- Color: {req.color}\n\n"
+        "Devices are provided as a JSON array.\n"
+        "Your response MUST be a JSON array of device objects using the same keys "
+        "(`title`, `link`, `price`, `rating`) and nothing else."
+    )
+
+    bedrock_text = analyze_with_bedrock(
+        devices=items_raw,
+        query=filter_query,
+        instructions=(
+            "You are a strict filter over a list of scraped marketplace items from Flipkart.\n"
+            "Given a desired device configuration and a JSON array of items, "
+            "you MUST respond ONLY with a JSON array of the items that best match "
+            "the desired configuration.\n\n"
+            f"Hard rule: the device title MUST contain the exact model string '{req.model}' "
+            "in a case-insensitive way; if the title does not contain that exact substring, "
+            "exclude the item.\n"
+            "Soft rules: RAM, storage and color should match when possible, but if they "
+            "are missing or differ slightly while the model title still matches, you may "
+            "still include the item.\n"
+            "Do not include any explanation text; return only raw JSON."
+        ),
+        max_tokens=800,
+        temperature=0.0,
+    )
+
+    filtered_items: list[dict] = items_raw
+    try:
+        parsed = json.loads(bedrock_text)
+        if isinstance(parsed, list):
+            filtered_items = [x for x in parsed if isinstance(x, dict)]
+    except Exception:
+        # If Bedrock doesn't return valid JSON, fall back to unfiltered items.
+        pass
+
+    # Extra safety: enforce that title contains the exact model string.
+    model_norm = (req.model or "").lower()
+    if model_norm:
+        filtered_items = [
+            item
+            for item in filtered_items
+            if isinstance(item.get("title"), str) and model_norm in item["title"].lower()
+        ]
+
+    items = [FlipkartScrapeItem(**item) for item in filtered_items]
+
+    matched_keys = {(i.title, i.link) for i in items}
+    non_matching_raw = [
+        item
+        for item in items_raw
+        if (item.get("title"), item.get("link")) not in matched_keys
+    ]
+    non_matching_items = [FlipkartScrapeItem(**item) for item in non_matching_raw]
+
+    return FlipkartScrapeResponse(
         query={
             "model": req.model,
             "ram": req.ram,
