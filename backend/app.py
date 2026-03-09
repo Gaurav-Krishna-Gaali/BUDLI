@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import urllib.parse
 import uuid
 from datetime import datetime
@@ -18,7 +19,14 @@ from database import engine, Base, get_db
 from models import RunModel, KnowledgeBaseEntryModel
 from pydantic import BaseModel, Field, field_validator, model_validator
 from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+
+try:
+    from curl_cffi import requests as _curl_requests
+except ImportError:
+    _curl_requests = None
 
 from bedrock_helper import analyze_with_bedrock
 
@@ -407,6 +415,75 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
 
 
+# Headers for requests-based Amazon scrape (browser-like to reduce bot detection)
+_AMAZON_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+def _scrape_amazon_search_bs4(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> List[Dict[str, Optional[str]]]:
+    """Amazon.in search scrape using requests + BeautifulSoup (no browser)."""
+    query = f"{model} {ram} {storage} {color}"
+    url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
+    items: List[Dict[str, Optional[str]]] = []
+    try:
+        res = requests.get(url, headers=_AMAZON_HEADERS, timeout=30)
+        res.raise_for_status()
+    except Exception as e:
+        logger.warning("Amazon bs4 request failed: %s", e)
+        return items
+    soup = BeautifulSoup(res.text, "lxml")
+    results = soup.select("div[data-component-type='s-search-result']")
+    for r in results[:limit]:
+        def _text(el):
+            if el is None:
+                return None
+            t = el.get_text(strip=True)
+            return t if t else None
+
+        def _attr(el, name, default=None):
+            if el is None:
+                return default
+            return el.get(name, default)
+
+        title_el_1 = r.select_one("h2 span")
+        title_el_2 = r.select_one("a.a-link-normal h2 span")
+        parts = []
+        if title_el_1:
+            parts.append(_text(title_el_1))
+        if title_el_2 and _text(title_el_2):
+            parts.append(_text(title_el_2))
+        title = " ".join(parts) if parts else None
+        if not title:
+            h2 = r.select_one("h2") or r.select_one("a.a-link-normal")
+            title = _text(h2) if h2 else None
+
+        link_el = r.select_one("a.a-link-normal[href*='/dp/'], a.a-link-normal[href*='/gp/product/']") or r.select_one("a.a-link-normal")
+        href = _attr(link_el, "href") if link_el else None
+        link = ("https://www.amazon.in" + href) if href and href.startswith("/") else href
+
+        rating_el = r.select_one("span.a-icon-alt")
+        reviews_el = r.select_one(".s-underline-text")
+        bought_el = r.select_one("span.a-size-base.a-color-secondary")
+        rating = _text(rating_el)
+        reviews = _text(reviews_el)
+        bought = _text(bought_el)
+
+        items.append({"title": title, "link": link, "rating": rating, "reviews": reviews, "bought": bought})
+    return items
+
+
 def _scrape_amazon_search(
     model: str,
     ram: str,
@@ -414,6 +491,7 @@ def _scrape_amazon_search(
     color: str,
     limit: int = 5,
 ) -> List[Dict[str, Optional[str]]]:
+    """Amazon.in search scrape using Playwright (browser). Use when bs4 returns empty (e.g. JS-rendered page)."""
     query = f"{model} {ram} {storage} {color}"
     url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
 
@@ -473,6 +551,82 @@ def _scrape_amazon_search(
     return items
 
 
+# Headers for requests-based Flipkart scrape (403 common without browser)
+_FLIPKART_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-IN,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://www.flipkart.com/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+}
+
+
+def _scrape_flipkart_search_bs4(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 10,
+) -> List[Dict[str, Optional[str]]]:
+    """Flipkart search scrape using requests + BeautifulSoup (no browser). Uses curl_cffi if available to avoid 403."""
+    query = f"{model} {ram} {storage} {color}"
+    base_url = "https://www.flipkart.com/search?q="
+    url = base_url + query.replace(" ", "%20")
+    items: List[Dict[str, Optional[str]]] = []
+    try:
+        if _curl_requests is not None:
+            res = _curl_requests.get(url, headers=_FLIPKART_HEADERS, timeout=30, impersonate="chrome")
+        else:
+            res = requests.get(url, headers=_FLIPKART_HEADERS, timeout=30)
+        if res.status_code != 200:
+            logger.warning("Flipkart bs4 returned %s (e.g. 403 = bot block)", res.status_code)
+            return items
+    except Exception as e:
+        logger.warning("Flipkart bs4 request failed: %s", e)
+        return items
+    soup = BeautifulSoup(res.text, "lxml")
+    links = soup.select("a[href*='/p/']")
+    seen_hrefs: set = set()
+    for a in links:
+        if len(items) >= limit:
+            break
+        href = a.get("href")
+        if not href or href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+        link = "https://www.flipkart.com" + href if href.startswith("/") else href
+        card = a.parent
+        while card and getattr(card, "name", None) != "div":
+            card = getattr(card, "parent", None)
+        if not card:
+            continue
+        card_text = card.get_text(separator="\n", strip=True) if card else ""
+        lines = [ln.strip() for ln in card_text.splitlines() if ln.strip()]
+        title = None
+        for line in lines:
+            if line.lower() in ("add to compare", "currently unavailable"):
+                continue
+            title = line
+            break
+        rating = None
+        for line in lines:
+            if "ratings" in line.lower():
+                rating = line
+                break
+        price = None
+        price_str = card.find(string=re.compile(r"₹"))
+        if price_str:
+            parent = getattr(price_str, "parent", None)
+            price = parent.get_text(strip=True) if parent else (price_str.strip() if isinstance(price_str, str) else None)
+        items.append({"title": title, "link": link, "price": price, "rating": rating})
+    return items
+
+
 def _scrape_flipkart_search(
     model: str,
     ram: str,
@@ -480,6 +634,7 @@ def _scrape_flipkart_search(
     color: str,
     limit: int = 10,
 ) -> List[Dict[str, Optional[str]]]:
+    """Flipkart search scrape using Playwright (browser). Use when bs4 returns empty."""
     query = f"{model} {ram} {storage} {color}"
     base_url = "https://www.flipkart.com/search?q="
     url = base_url + query.replace(" ", "%20")
@@ -551,20 +706,32 @@ def _scrape_flipkart_search(
 async def amazon_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
     """
     Scrape Amazon.in search results for a given device config.
-
-    This reuses the Playwright logic from the standalone script and wraps it
-    in the main FastAPI app as /amazon-scrape.
+    Uses requests + BeautifulSoup first; falls back to Playwright if bs4 returns no results.
     """
     loop = asyncio.get_running_loop()
     items_raw = await loop.run_in_executor(
         None,
-        _scrape_amazon_search,
+        _scrape_amazon_search_bs4,
         req.model,
         req.ram,
         req.storage,
         req.color,
         req.limit,
     )
+    # If bs4 got nothing (e.g. page is JS-rendered or blocked), try Playwright
+    if not items_raw:
+        try:
+            items_raw = await loop.run_in_executor(
+                None,
+                _scrape_amazon_search,
+                req.model,
+                req.ram,
+                req.storage,
+                req.color,
+                req.limit,
+            )
+        except Exception as e:
+            logger.warning("Amazon Playwright fallback failed: %s", e)
 
     # Send scraped items + a filtering query to Bedrock so it can
     # return only the items that best match the requested config.
@@ -678,17 +845,31 @@ async def amazon_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
 async def flipkart_scrape(req: VelocityScrapeRequest) -> FlipkartScrapeResponse:
     """
     Scrape Flipkart search results for a given device config and filter with Bedrock.
+    Uses requests + BeautifulSoup first; falls back to Playwright if bs4 returns no results.
     """
     loop = asyncio.get_running_loop()
     items_raw = await loop.run_in_executor(
         None,
-        _scrape_flipkart_search,
+        _scrape_flipkart_search_bs4,
         req.model,
         req.ram,
         req.storage,
         req.color,
         req.limit,
     )
+    if not items_raw:
+        try:
+            items_raw = await loop.run_in_executor(
+                None,
+                _scrape_flipkart_search,
+                req.model,
+                req.ram,
+                req.storage,
+                req.color,
+                req.limit,
+            )
+        except Exception as e:
+            logger.warning("Flipkart Playwright fallback failed: %s", e)
 
     filter_query = (
         "Filter the following Flipkart search results for devices.\n"
