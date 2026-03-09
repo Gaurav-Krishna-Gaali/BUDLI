@@ -498,7 +498,7 @@ def _scrape_amazon_search(
     items: List[Dict[str, Optional[str]]] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=False)
+        browser = p.chromium.launch(channel="chrome", headless=True)
         page = browser.new_page()
 
         page.goto(url)
@@ -642,7 +642,7 @@ def _scrape_flipkart_search(
     items: List[Dict[str, Optional[str]]] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=False)
+        browser = p.chromium.launch(channel="chrome", headless=True)
         
         page = browser.new_page()
 
