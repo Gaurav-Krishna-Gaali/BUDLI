@@ -528,6 +528,8 @@ export function mapAnalyzeResultsToPricingResults(
     data_found_in?: string[]
     source_url?: string
     source_urls?: Array<{ source: string; url: string }>
+    amazon_velocity_items?: Array<{ title?: string | null; link?: string | null; rating?: string | null; reviews?: string | null; bought?: string | null }>
+    flipkart_velocity_items?: Array<{ title?: string | null; link?: string | null; price?: string | null; rating?: string | null }>
   }>
 ): PricingResult[] {
   return results.map((r) => {
@@ -569,6 +571,8 @@ export function mapAnalyzeResultsToPricingResults(
       riskFlags: r.risk_flags || [],
       marketSignals,
       sourceUrl: r.source_url,
+      amazonVelocityItems: r.amazon_velocity_items ?? [],
+      flipkartVelocityItems: r.flipkart_velocity_items ?? [],
     };
   });
 }

@@ -296,6 +296,92 @@ export default function RunResultsPage() {
                       </div>
                     )}
 
+                    {/* Velocity (Amazon & Flipkart): title, link, rating, reviews, bought */}
+                    {((result.amazonVelocityItems?.length ?? 0) > 0 || (result.flipkartVelocityItems?.length ?? 0) > 0) && (
+                      <div className="space-y-4">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Velocity</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Demand signals from Amazon and Flipkart for this config (title, rating, reviews, bought).
+                        </p>
+                        {(result.amazonVelocityItems?.length ?? 0) > 0 && (
+                          <div className="rounded-lg border border-border overflow-hidden bg-card">
+                            <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                              <p className="text-sm font-medium text-foreground">Amazon</p>
+                              <p className="text-[10px] text-muted-foreground">{result.amazonVelocityItems!.length} listing(s)</p>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs min-w-[420px]">
+                                <thead>
+                                  <tr className="bg-muted/30 border-b border-border">
+                                    <th className="text-left py-2 px-3 font-medium">Title</th>
+                                    <th className="text-left py-2 px-3 font-medium">Rating</th>
+                                    <th className="text-left py-2 px-3 font-medium">Reviews</th>
+                                    <th className="text-left py-2 px-3 font-medium">Bought</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {result.amazonVelocityItems!.map((item, i) => (
+                                    <tr key={i} className="border-b border-border last:border-0">
+                                      <td className="py-2 px-3">
+                                        {item.link ? (
+                                          <a href={item.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                                            <span className="truncate max-w-[220px] inline-block align-middle">{item.title ?? "—"}</span>
+                                            <ExternalLink className="w-3 h-3 shrink-0" />
+                                          </a>
+                                        ) : (
+                                          <span className="truncate max-w-[220px] inline-block">{item.title ?? "—"}</span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-3">{item.rating ?? "—"}</td>
+                                      <td className="py-2 px-3">{item.reviews ?? "—"}</td>
+                                      <td className="py-2 px-3">{item.bought ?? "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                        {(result.flipkartVelocityItems?.length ?? 0) > 0 && (
+                          <div className="rounded-lg border border-border overflow-hidden bg-card">
+                            <div className="px-3 py-2 bg-muted/50 border-b border-border">
+                              <p className="text-sm font-medium text-foreground">Flipkart</p>
+                              <p className="text-[10px] text-muted-foreground">{result.flipkartVelocityItems!.length} listing(s)</p>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs min-w-[380px]">
+                                <thead>
+                                  <tr className="bg-muted/30 border-b border-border">
+                                    <th className="text-left py-2 px-3 font-medium">Title</th>
+                                    <th className="text-left py-2 px-3 font-medium">Price</th>
+                                    <th className="text-left py-2 px-3 font-medium">Rating</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {result.flipkartVelocityItems!.map((item, i) => (
+                                    <tr key={i} className="border-b border-border last:border-0">
+                                      <td className="py-2 px-3">
+                                        {item.link ? (
+                                          <a href={item.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                                            <span className="truncate max-w-[220px] inline-block align-middle">{item.title ?? "—"}</span>
+                                            <ExternalLink className="w-3 h-3 shrink-0" />
+                                          </a>
+                                        ) : (
+                                          <span className="truncate max-w-[220px] inline-block">{item.title ?? "—"}</span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-3">{item.price ?? "—"}</td>
+                                      <td className="py-2 px-3">{item.rating ?? "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Explanation + Data sources */}
                     <div className="space-y-4">
                       <div className="bg-muted/50 rounded-lg p-4">
