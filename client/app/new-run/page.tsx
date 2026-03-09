@@ -213,6 +213,7 @@ export default function NewRunPage() {
           network_type: "4G",
           condition_tier: d.condition,
           warranty_months: "0",
+          color: d.color ?? "",
         })),
       }
       const { job_id, live_urls_by_device } = await startAnalyzeDevices(payload)

@@ -1014,6 +1014,7 @@ class AnalyzeDevicesRequestItem(BaseModel):
     network_type: str = Field(..., max_length=10)
     condition_tier: str = Field(..., min_length=1, max_length=20)
     warranty_months: str = Field(..., max_length=5)
+    color: str = Field("", max_length=50)  # optional; used for velocity (Amazon/Flipkart) signals
 
     @field_validator("network_type")
     @classmethod
