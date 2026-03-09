@@ -546,13 +546,13 @@ def _scrape_flipkart_search(
     return items
 
 
-@app.post("/velocity-scrape", response_model=VelocityScrapeResponse)
-async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
+@app.post("/amazon-scrape", response_model=VelocityScrapeResponse)
+async def amazon_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
     """
     Scrape Amazon.in search results for a given device config.
 
     This reuses the Playwright logic from the standalone script and wraps it
-    in the main FastAPI app as /velocity-scrape.
+    in the main FastAPI app as /amazon-scrape.
     """
     loop = asyncio.get_running_loop()
     items_raw = await loop.run_in_executor(
@@ -569,11 +569,17 @@ async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
     # return only the items that best match the requested config.
     filter_query = (
         "Filter the following Amazon search results for devices.\n"
-        "Return ONLY the items that clearly match this desired configuration:\n\n"
+        "Return ONLY the items that clearly match this desired configuration and are ACTUAL PHONE HANDSETS, "
+        "not accessories:\n\n"
         f"- Model: {req.model}\n"
         f"- RAM: {req.ram}\n"
         f"- Storage: {req.storage}\n"
         f"- Color: {req.color}\n\n"
+        "IMPORTANT:\n"
+        "- EXCLUDE accessories such as cases, covers, screen protectors, tempered glass, chargers, cables,\n"
+        "  stands, holders, stickers, camera lens protectors, MagSafe rings, bands, straps, etc.\n"
+        "- ONLY keep listings that are the actual phone/handset itself.\n"
+        "- If there are zero matching phone listings, return an empty JSON array [].\n\n"
         "Devices are provided as a JSON array.\n"
         "Your response MUST be a JSON array of device objects using the same keys "
         "(`title`, `link`, `rating`, `reviews`, `bought`) and nothing else."
@@ -592,7 +598,12 @@ async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
             "exclude the item.\n"
             "Soft rules: RAM, storage and color should match when possible, but if they "
             "are missing or differ slightly while the model title still matches, you may "
-            "still include the item.\n"
+            "still include the item.\n\n"
+            "Critical exclusions:\n"
+            "- Do NOT return accessories: cases, covers, screen protectors, tempered glass, chargers, cables,\n"
+            "  stands, holders, stickers, camera lens protectors, MagSafe rings, bands, straps, or similar.\n"
+            "- Only include items that are clearly the phone/handset itself.\n"
+            "- If no phone handsets match, return an empty JSON array [].\n\n"
             "Do not include any explanation text; return only raw JSON."
         ),
         max_tokens=800,
@@ -608,13 +619,34 @@ async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
         # If Bedrock doesn't return valid JSON, fall back to unfiltered items.
         pass
 
-    # Extra safety: enforce that title contains the exact model string.
+    # Extra safety: enforce that title contains the exact model string
+    # and that we are not returning obvious accessories.
     model_norm = (req.model or "").lower()
+    accessory_keywords = [
+        "case",
+        "cover",
+        "screen protector",
+        "tempered glass",
+        "glass",
+        "charger",
+        "cable",
+        "adapter",
+        "stand",
+        "holder",
+        "ring",
+        "band",
+        "strap",
+        "lens protector",
+        "magnetic case",
+        "back cover",
+    ]
     if model_norm:
         filtered_items = [
             item
             for item in filtered_items
-            if isinstance(item.get("title"), str) and model_norm in item["title"].lower()
+            if isinstance(item.get("title"), str)
+            and model_norm in item["title"].lower()
+            and not any(kw in item["title"].lower() for kw in accessory_keywords)
         ]
 
     items = [VelocityScrapeItem(**item) for item in filtered_items]

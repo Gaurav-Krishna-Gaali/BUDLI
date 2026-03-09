@@ -2,10 +2,12 @@ import type {
   DeviceInput,
   PricingResult,
   MarketSignal,
-  VelocityCategory,
   KBPattern,
   ScrapeStartResponse,
   ScrapeResultsResponse,
+  VelocityScrapeRequest,
+  VelocityScrapeResponse,
+  FlipkartScrapeResponse,
   AnalyzeDevicesStartResponse,
   AnalyzeDevicesStatusResponse,
 } from "./types";
@@ -36,6 +38,52 @@ export async function getScrapeResults(jobId: string): Promise<ScrapeResultsResp
     throw new Error(res.statusText || "Failed to get results")
   }
   return res.json()
+}
+
+// -------------------------------------------------------------------
+// Velocity endpoints (Amazon & Flipkart)
+// -------------------------------------------------------------------
+
+export async function startAmazonVelocityScrape(
+  payload: VelocityScrapeRequest,
+): Promise<VelocityScrapeResponse> {
+  const res = await fetch(`${API_BASE_URL}/amazon-scrape`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: payload.model.trim(),
+      ram: payload.ram.trim(),
+      storage: payload.storage.trim(),
+      color: payload.color.trim(),
+      limit: payload.limit ?? 5,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || res.statusText || "Failed to start Amazon velocity scrape")
+  }
+  return res.json();
+}
+
+export async function startFlipkartVelocityScrape(
+  payload: VelocityScrapeRequest,
+): Promise<FlipkartScrapeResponse> {
+  const res = await fetch(`${API_BASE_URL}/flipkart-scrape`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: payload.model.trim(),
+      ram: payload.ram.trim(),
+      storage: payload.storage.trim(),
+      color: payload.color.trim(),
+      limit: payload.limit ?? 5,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || res.statusText || "Failed to start Flipkart velocity scrape")
+  }
+  return res.json();
 }
 
 // -------------------------------------------------------------------

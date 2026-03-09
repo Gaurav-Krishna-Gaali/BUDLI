@@ -128,6 +128,41 @@ export interface ScrapeResultsResponse {
   count?: number
 }
 
+export interface VelocityScrapeRequest {
+  model: string
+  ram: string
+  storage: string
+  color: string
+  limit?: number
+}
+
+export interface VelocityScrapeItem {
+  title?: string | null
+  link?: string | null
+  rating?: string | null
+  reviews?: string | null
+  bought?: string | null
+}
+
+export interface VelocityScrapeResponse {
+  query: Record<string, unknown>
+  results: VelocityScrapeItem[]
+  non_matching: VelocityScrapeItem[]
+}
+
+export interface FlipkartScrapeItem {
+  title?: string | null
+  link?: string | null
+  price?: string | null
+  rating?: string | null
+}
+
+export interface FlipkartScrapeResponse {
+  query: Record<string, unknown>
+  results: FlipkartScrapeItem[]
+  non_matching: FlipkartScrapeItem[]
+}
+
 // Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
 export interface AnalyzeDevicesStartResponse {
   job_id: string

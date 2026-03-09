@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText, ExternalLink, ChevronDown } from "lucide-react"
+import { UploadCloud, Plus, Trash2, Download, AlertCircle, CheckCircle2, Loader2, FileText, ExternalLink, ChevronDown, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
@@ -11,11 +11,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
 import { saveRun, parseCSV, generateInputTemplateCSV, getKBPatterns } from "@/lib/store"
-import { startAnalyzeDevices, getAnalyzeDevicesStatus, mapAnalyzeResultsToPricingResults } from "@/lib/pricing-engine"
-import type { DeviceInput, Condition, BrowserScrapeRow, PricingResult } from "@/lib/types"
+import { startAnalyzeDevices, getAnalyzeDevicesStatus, mapAnalyzeResultsToPricingResults, startAmazonVelocityScrape, startFlipkartVelocityScrape } from "@/lib/pricing-engine"
+import type { DeviceInput, Condition, BrowserScrapeRow, PricingResult, VelocityScrapeResponse, FlipkartScrapeResponse } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const POLL_INTERVAL_MS = 15_000 // 15 seconds
+
+type DeviceVelocityState = {
+  loading: boolean
+  error: string | null
+  amazon: VelocityScrapeResponse | null
+  flipkart: FlipkartScrapeResponse | null
+}
 
 const CONDITIONS: Condition[] = ["superb", "fair", "good"]
 
@@ -47,6 +54,7 @@ export default function NewRunPage() {
   /** Per-device pricing results when run completes (same order as devices) */
   const [lastRunResults, setLastRunResults] = useState<PricingResult[] | null>(null)
   const [completedRunId, setCompletedRunId] = useState<string | null>(null)
+  const [velocityByDevice, setVelocityByDevice] = useState<Record<string, DeviceVelocityState>>({})
 
   const addDevice = () => {
     if (devices.length >= 10) return
@@ -59,6 +67,59 @@ export default function NewRunPage() {
 
   const updateDevice = (id: string, field: keyof DeviceInput, value: string | number) => {
     setDevices(prev => prev.map(d => d.id === id ? { ...d, [field]: value } : d))
+  }
+
+  const handleFetchDeviceVelocity = async (device: DeviceInput) => {
+    if (!device.model || !device.ram || !device.storage || !device.color) return
+    setVelocityByDevice(prev => ({
+      ...prev,
+      [device.id]: {
+        amazon: prev[device.id]?.amazon ?? null,
+        flipkart: prev[device.id]?.flipkart ?? null,
+        error: null,
+        loading: true,
+      },
+    }))
+    try {
+      const payload = {
+        model: device.model,
+        ram: device.ram,
+        storage: device.storage,
+        color: device.color,
+        limit: 8,
+      }
+      const [amazonRes, flipkartRes] = await Promise.all([
+        startAmazonVelocityScrape(payload),
+        startFlipkartVelocityScrape(payload),
+      ])
+      setVelocityByDevice(prev => ({
+        ...prev,
+        [device.id]: {
+          amazon: amazonRes,
+          flipkart: flipkartRes,
+          error: null,
+          loading: false,
+        },
+      }))
+    } catch (e) {
+      setVelocityByDevice(prev => ({
+        ...prev,
+        [device.id]: {
+          amazon: prev[device.id]?.amazon ?? null,
+          flipkart: prev[device.id]?.flipkart ?? null,
+          error: e instanceof Error ? e.message : "Failed to fetch velocity signals",
+          loading: false,
+        },
+      }))
+    }
+  }
+
+  const resetDeviceVelocity = (id: string) => {
+    setVelocityByDevice(prev => {
+      const copy = { ...prev }
+      delete copy[id]
+      return copy
+    })
   }
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -378,6 +439,117 @@ export default function NewRunPage() {
                     </Select>
                   </div>
                 </div>
+              </div>
+
+              {/* Velocity signals for this device */}
+              <div className="px-4 pb-4 pt-2 border-t border-border bg-muted/5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Velocity (Amazon &amp; Flipkart)
+                  </p>
+                  {velocityByDevice[device.id] && (
+                    <button
+                      onClick={() => resetDeviceVelocity(device.id)}
+                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleFetchDeviceVelocity(device)}
+                  disabled={
+                    processing ||
+                    !!velocityByDevice[device.id]?.loading ||
+                    !device.storage ||
+                    !device.model ||
+                    !device.ram ||
+                    !device.color
+                  }
+                  className="inline-flex items-center gap-1.5 text-[11px] text-primary hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {velocityByDevice[device.id]?.loading ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Fetching velocity…
+                    </>
+                  ) : (
+                    <>
+                      <Search className="w-3 h-3" />
+                      Check velocity for this config
+                    </>
+                  )}
+                </button>
+                {velocityByDevice[device.id]?.error && (
+                  <p className="text-[11px] text-destructive flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {velocityByDevice[device.id]?.error}
+                  </p>
+                )}
+                {(() => {
+                  const v = velocityByDevice[device.id]
+                  if (!v || v.loading || v.error) return null
+                  const amazonResults = v.amazon?.results ?? []
+                  const flipkartResults = v.flipkart?.results ?? []
+                  if (amazonResults.length === 0 && flipkartResults.length === 0) {
+                    return (
+                      <p className="text-[11px] text-muted-foreground">
+                        No matching Amazon or Flipkart listings for this configuration.
+                      </p>
+                    )
+                  }
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {amazonResults.length > 0 && (
+                        <div className="rounded-md border border-border bg-card px-2.5 py-2">
+                          <p className="text-[11px] font-semibold text-foreground mb-1">
+                            Amazon ({amazonResults.length})
+                          </p>
+                          <ul className="space-y-1">
+                            {amazonResults.slice(0, 3).map((item, i) => (
+                              <li key={i} className="text-[11px] text-muted-foreground">
+                                {item.link ? (
+                                  <a
+                                    href={item.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 hover:underline"
+                                  >
+                                    <span className="truncate max-w-[180px] inline-block align-middle">
+                                      {item.title ?? "—"}
+                                    </span>
+                                    <ExternalLink className="w-3 h-3 shrink-0" />
+                                  </a>
+                                ) : (
+                                  <span>{item.title ?? "—"}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {flipkartResults.length > 0 && (
+                        <div className="rounded-md border border-border bg-card px-2.5 py-2">
+                          <p className="text-[11px] font-semibold text-foreground mb-1">
+                            Flipkart ({flipkartResults.length})
+                          </p>
+                          <ul className="space-y-1">
+                            {flipkartResults.slice(0, 3).map((item, i) => (
+                              <li key={i} className="text-[11px] text-muted-foreground flex items-center justify-between gap-2">
+                                <span className="truncate max-w-[150px]">
+                                  {item.title ?? "—"}
+                                </span>
+                                <span className="shrink-0 text-[11px] text-foreground">
+                                  {item.price ?? "—"}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
 
               {/* Under this device: Job ID + Live iframes (collapsible) when processing */}

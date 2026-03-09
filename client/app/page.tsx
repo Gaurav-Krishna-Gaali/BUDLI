@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AppShell } from "@/components/app-shell"
 import { getRuns, getKBEntries, getKBPatterns } from "@/lib/store"
-import { startBrowserScrape, getScrapeResults } from "@/lib/pricing-engine"
-import type { Run, ScrapeResultsResponse } from "@/lib/types"
+import { startBrowserScrape, getScrapeResults, startAmazonVelocityScrape, startFlipkartVelocityScrape } from "@/lib/pricing-engine"
+import type { Run, ScrapeResultsResponse, VelocityScrapeResponse, FlipkartScrapeResponse } from "@/lib/types"
 
 const WORKFLOW_STEPS = [
   { step: "01", title: "Upload Devices", desc: "Provide a CSV or enter up to 10 device models with specs and condition." },
@@ -38,6 +38,16 @@ export default function DashboardPage() {
   const [scrapeError, setScrapeError] = useState<string | null>(null)
   const [liveUrls, setLiveUrls] = useState<string[]>([])
   const scrapeInFlightRef = useRef(false)
+
+  // Velocity (Amazon & Flipkart) state
+  const [velocityModel, setVelocityModel] = useState("")
+  const [velocityRam, setVelocityRam] = useState("")
+  const [velocityStorage, setVelocityStorage] = useState("")
+  const [velocityColor, setVelocityColor] = useState("")
+  const [velocityLoading, setVelocityLoading] = useState(false)
+  const [velocityError, setVelocityError] = useState<string | null>(null)
+  const [amazonVelocity, setAmazonVelocity] = useState<VelocityScrapeResponse | null>(null)
+  const [flipkartVelocity, setFlipkartVelocity] = useState<FlipkartScrapeResponse | null>(null)
 
   useEffect(() => {
     getRuns().then(setRuns)
@@ -101,6 +111,39 @@ export default function DashboardPage() {
     setScrapeResult(null)
     setScrapeError(null)
     setLiveUrls([])
+  }
+
+  const handleFetchVelocity = async () => {
+    const model = velocityModel.trim()
+    const ram = velocityRam.trim()
+    const storage = velocityStorage.trim()
+    const color = velocityColor.trim()
+    if (!model || !ram || !storage || !color) return
+
+    setVelocityLoading(true)
+    setVelocityError(null)
+    setAmazonVelocity(null)
+    setFlipkartVelocity(null)
+    try {
+      const payload = { model, ram, storage, color, limit: 8 }
+      const [amazonRes, flipkartRes] = await Promise.all([
+        startAmazonVelocityScrape(payload),
+        startFlipkartVelocityScrape(payload),
+      ])
+      setAmazonVelocity(amazonRes)
+      setFlipkartVelocity(flipkartRes)
+    } catch (e) {
+      setVelocityError(e instanceof Error ? e.message : "Failed to fetch velocity signals")
+    } finally {
+      setVelocityLoading(false)
+    }
+  }
+
+  const resetVelocity = () => {
+    setAmazonVelocity(null)
+    setFlipkartVelocity(null)
+    setVelocityError(null)
+    setVelocityLoading(false)
   }
 
   const allResults = runs.flatMap(r => r.results)
@@ -379,6 +422,177 @@ export default function DashboardPage() {
             )}
             {scrapeStatus === "finished" && !scrapeResult?.results && (
               <p className="text-xs text-muted-foreground">No results returned from scrape.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Velocity signals (Amazon & Flipkart) */}
+        <div className="mb-8 sm:mb-10">
+          <h2 className="text-sm font-semibold text-foreground mb-4">Velocity signals (Amazon &amp; Flipkart)</h2>
+          <div className="bg-card border border-border rounded-lg p-4 sm:p-5">
+            <p className="text-xs text-muted-foreground mb-4">
+              Check demand indicators for a specific device using Amazon search results and Flipkart listing depth.
+            </p>
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-end gap-2 sm:gap-3 mb-4">
+              <Input
+                placeholder="Model (e.g. iPhone 15)"
+                value={velocityModel}
+                onChange={(e) => setVelocityModel(e.target.value)}
+                className="sm:max-w-xs h-9 text-sm w-full"
+              />
+              <Input
+                placeholder="RAM (e.g. 6GB)"
+                value={velocityRam}
+                onChange={(e) => setVelocityRam(e.target.value)}
+                className="sm:max-w-[120px] h-9 text-sm w-full"
+              />
+              <Input
+                placeholder="Storage (e.g. 128GB)"
+                value={velocityStorage}
+                onChange={(e) => setVelocityStorage(e.target.value)}
+                className="sm:max-w-[140px] h-9 text-sm w-full"
+              />
+              <Input
+                placeholder="Color (e.g. Black)"
+                value={velocityColor}
+                onChange={(e) => setVelocityColor(e.target.value)}
+                className="sm:max-w-[140px] h-9 text-sm w-full"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleFetchVelocity}
+                  disabled={
+                    velocityLoading ||
+                    !velocityModel.trim() ||
+                    !velocityRam.trim() ||
+                    !velocityStorage.trim() ||
+                    !velocityColor.trim()
+                  }
+                >
+                  {velocityLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Fetching…
+                    </>
+                  ) : (
+                    <>
+                      <Search className="w-4 h-4 mr-2" />
+                      Get velocity
+                    </>
+                  )}
+                </Button>
+                {(amazonVelocity || flipkartVelocity || velocityError) && (
+                  <Button variant="ghost" size="sm" onClick={resetVelocity}>
+                    Reset
+                  </Button>
+                )}
+              </div>
+            </div>
+            {velocityError && (
+              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2 mb-4">
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                {velocityError}
+              </div>
+            )}
+            {(amazonVelocity?.results?.length ?? 0) === 0 &&
+              (flipkartVelocity?.results?.length ?? 0) === 0 &&
+              !velocityError &&
+              !velocityLoading &&
+              (amazonVelocity || flipkartVelocity) && (
+                <p className="text-xs text-muted-foreground">No matching listings found for this configuration.</p>
+              )}
+            {(amazonVelocity?.results?.length ?? 0) > 0 && (
+              <div className="space-y-3 mt-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Amazon results ({amazonVelocity?.results.length ?? 0} item{(amazonVelocity?.results.length ?? 0) !== 1 ? "s" : ""})
+                </p>
+                <div className="rounded-lg border border-border overflow-hidden bg-card">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs min-w-[420px]">
+                      <thead>
+                        <tr className="bg-muted/30 border-b border-border">
+                          <th className="text-left py-2 px-3 font-medium">Title</th>
+                          <th className="text-left py-2 px-3 font-medium">Rating</th>
+                          <th className="text-left py-2 px-3 font-medium">Reviews</th>
+                          <th className="text-left py-2 px-3 font-medium">Bought</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {amazonVelocity?.results.map((item, i) => (
+                          <tr key={i} className="border-b border-border last:border-0">
+                            <td className="py-2 px-3">
+                              {item.link ? (
+                                <a
+                                  href={item.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                >
+                                  <span className="truncate max-w-[260px] inline-block align-middle">
+                                    {item.title ?? "—"}
+                                  </span>
+                                  <ExternalLink className="w-3 h-3 shrink-0" />
+                                </a>
+                              ) : (
+                                <span className="text-xs text-foreground">{item.title ?? "—"}</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3">{item.rating ?? "—"}</td>
+                            <td className="py-2 px-3">{item.reviews ?? "—"}</td>
+                            <td className="py-2 px-3">{item.bought ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+            {(flipkartVelocity?.results?.length ?? 0) > 0 && (
+              <div className="space-y-3 mt-4">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  Flipkart results ({flipkartVelocity?.results.length ?? 0} item{(flipkartVelocity?.results.length ?? 0) !== 1 ? "s" : ""})
+                </p>
+                <div className="rounded-lg border border-border overflow-hidden bg-card">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs min-w-[420px]">
+                      <thead>
+                        <tr className="bg-muted/30 border-b border-border">
+                          <th className="text-left py-2 px-3 font-medium">Title</th>
+                          <th className="text-left py-2 px-3 font-medium">Price</th>
+                          <th className="text-left py-2 px-3 font-medium">Rating</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {flipkartVelocity?.results.map((item, i) => (
+                          <tr key={i} className="border-b border-border last:border-0">
+                            <td className="py-2 px-3">
+                              {item.link ? (
+                                <a
+                                  href={item.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                >
+                                  <span className="truncate max-w-[260px] inline-block align-middle">
+                                    {item.title ?? "—"}
+                                  </span>
+                                  <ExternalLink className="w-3 h-3 shrink-0" />
+                                </a>
+                              ) : (
+                                <span className="text-xs text-foreground">{item.title ?? "—"}</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3">{item.price ?? "—"}</td>
+                            <td className="py-2 px-3">{item.rating ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>
