@@ -566,6 +566,25 @@ _FLIPKART_HEADERS = {
 }
 
 
+def _parse_flipkart_rating_line(raw: Optional[str]) -> Optional[str]:
+    """
+    Parse Flipkart rating line where star rating (e.g. 4.6) is concatenated with
+    count (e.g. 2,73,129 Ratings & 9,540 Reviews) into one string like
+    '4.62,73,129 Ratings & 9,540 Reviews'. Returns a clear formatted string.
+    """
+    if not raw or not raw.strip():
+        return raw
+    raw = raw.strip()
+    # Match leading "X.X" (star rating) so we can separate it from the count
+    m = re.match(r"^(\d\.\d)(.*)$", raw)
+    if m:
+        star, rest = m.group(1), m.group(2).strip()
+        if rest:
+            return f"{star} ★ | {rest}"
+        return f"{star} ★"
+    return raw
+
+
 def _scrape_flipkart_search_bs4(
     model: str,
     ram: str,
@@ -616,7 +635,7 @@ def _scrape_flipkart_search_bs4(
         rating = None
         for line in lines:
             if "ratings" in line.lower():
-                rating = line
+                rating = _parse_flipkart_rating_line(line)
                 break
         price = None
         price_str = card.find(string=re.compile(r"₹"))
@@ -671,7 +690,7 @@ def _scrape_flipkart_search(
             rating: Optional[str] = None
             for line in lines:
                 if "ratings" in line.lower():
-                    rating = line
+                    rating = _parse_flipkart_rating_line(line)
                     break
 
             # Link

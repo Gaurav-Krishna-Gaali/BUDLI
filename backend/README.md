@@ -37,10 +37,21 @@ SERPAPI_API_KEY=your_serpapi_key
 ## Run
 
 ```bash
-uvicorn server:app --reload --port 8000
+uvicorn app:app --reload --port 8000
 ```
 
 Open docs at `http://127.0.0.1:8000/docs`.
+
+### Run with Docker
+
+From the `backend` directory:
+
+```bash
+docker build -t budli-backend .
+docker run --rm -p 8000:8000 --env-file .env budli-backend
+```
+
+Ensure `.env` exists with `DATABASE_URL`, AWS keys, `SERPAPI_KEY`, etc. Do not commit `.env`; pass it at runtime.
 
 ## Endpoints
 
