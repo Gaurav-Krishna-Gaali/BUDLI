@@ -23,6 +23,23 @@ export interface MarketSignal {
   scrapedAt: string
 }
 
+/** Amazon velocity listing (title, link, rating, reviews, bought) for run detail UI */
+export interface AmazonVelocityItem {
+  title?: string | null
+  link?: string | null
+  rating?: string | null
+  reviews?: string | null
+  bought?: string | null
+}
+
+/** Flipkart velocity listing (title, link, price, rating) for run detail UI */
+export interface FlipkartVelocityItem {
+  title?: string | null
+  link?: string | null
+  price?: string | null
+  rating?: string | null
+}
+
 export interface PricingResult {
   deviceId: string
   recommendedPrice: number
@@ -42,6 +59,9 @@ export interface PricingResult {
   riskFlags: string[]
   marketSignals: MarketSignal[]
   sourceUrl?: string
+  /** Velocity listings for UI: Amazon (bought, rating, reviews, title, link) and Flipkart (rating, price, title, link) */
+  amazonVelocityItems?: AmazonVelocityItem[]
+  flipkartVelocityItems?: FlipkartVelocityItem[]
   // Human review fields
   humanApprovedPrice?: number
   humanVelocityOverride?: VelocityCategory
@@ -128,6 +148,41 @@ export interface ScrapeResultsResponse {
   count?: number
 }
 
+export interface VelocityScrapeRequest {
+  model: string
+  ram: string
+  storage: string
+  color: string
+  limit?: number
+}
+
+export interface VelocityScrapeItem {
+  title?: string | null
+  link?: string | null
+  rating?: string | null
+  reviews?: string | null
+  bought?: string | null
+}
+
+export interface VelocityScrapeResponse {
+  query: Record<string, unknown>
+  results: VelocityScrapeItem[]
+  non_matching: VelocityScrapeItem[]
+}
+
+export interface FlipkartScrapeItem {
+  title?: string | null
+  link?: string | null
+  price?: string | null
+  rating?: string | null
+}
+
+export interface FlipkartScrapeResponse {
+  query: Record<string, unknown>
+  results: FlipkartScrapeItem[]
+  non_matching: FlipkartScrapeItem[]
+}
+
 // Async analyze-devices (POST /analyze-devices/start, GET /analyze-devices/status/{job_id})
 export interface AnalyzeDevicesStartResponse {
   job_id: string
@@ -149,6 +204,11 @@ export interface AnalyzeDevicesStatusResponse {
     data_found_in?: string[]
     source_url?: string
     source_urls?: Array<{ source: string; url: string }>
+    amazon_bought_tags?: string[]
+    flipkart_rating_tags?: string[]
+    /** Full velocity items for UI: title, link, rating, reviews, bought (Amazon); title, link, price, rating (Flipkart) */
+    amazon_velocity_items?: AmazonVelocityItem[]
+    flipkart_velocity_items?: FlipkartVelocityItem[]
   }>
   scrape_results?: Record<string, BrowserScrapeRow[]>
 }

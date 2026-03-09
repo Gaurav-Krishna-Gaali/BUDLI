@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, List, Dict
 
 import asyncio
 import csv
@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import urllib.parse
 import uuid
 from datetime import datetime
@@ -18,6 +19,14 @@ from database import engine, Base, get_db
 from models import RunModel, KnowledgeBaseEntryModel
 from pydantic import BaseModel, Field, field_validator, model_validator
 from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+
+try:
+    from curl_cffi import requests as _curl_requests
+except ImportError:
+    _curl_requests = None
 
 from bedrock_helper import analyze_with_bedrock
 
@@ -123,6 +132,41 @@ class ScrapeResponse(BaseModel):
     query: str
     count: int
     devices: list[Device]
+
+
+class VelocityScrapeRequest(BaseModel):
+    model: str = Field(..., min_length=1, max_length=200)
+    ram: str = Field(..., min_length=1, max_length=50)
+    storage: str = Field(..., min_length=1, max_length=50)
+    color: str = Field(..., min_length=1, max_length=50)
+    limit: int = Field(5, ge=1, le=20)
+
+
+class VelocityScrapeItem(BaseModel):
+    title: Optional[str] = None
+    link: Optional[str] = None
+    rating: Optional[str] = None
+    reviews: Optional[str] = None
+    bought: Optional[str] = None
+
+
+class VelocityScrapeResponse(BaseModel):
+    query: dict
+    results: List[VelocityScrapeItem]
+    non_matching: List[VelocityScrapeItem]
+
+
+class FlipkartScrapeItem(BaseModel):
+    title: Optional[str] = None
+    link: Optional[str] = None
+    price: Optional[str] = None
+    rating: Optional[str] = None
+
+
+class FlipkartScrapeResponse(BaseModel):
+    query: dict
+    results: List[FlipkartScrapeItem]
+    non_matching: List[FlipkartScrapeItem]
 
 
 # --- BrowserUse scraper ---
@@ -371,6 +415,591 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
 
 
+# Headers for requests-based Amazon scrape (browser-like to reduce bot detection)
+_AMAZON_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+def _scrape_amazon_search_bs4(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> List[Dict[str, Optional[str]]]:
+    """Amazon.in search scrape using requests + BeautifulSoup (no browser)."""
+    query = f"{model} {ram} {storage} {color}"
+    url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
+    items: List[Dict[str, Optional[str]]] = []
+    try:
+        res = requests.get(url, headers=_AMAZON_HEADERS, timeout=30)
+        res.raise_for_status()
+    except Exception as e:
+        logger.warning("Amazon bs4 request failed: %s", e)
+        return items
+    soup = BeautifulSoup(res.text, "lxml")
+    results = soup.select("div[data-component-type='s-search-result']")
+    for r in results[:limit]:
+        def _text(el):
+            if el is None:
+                return None
+            t = el.get_text(strip=True)
+            return t if t else None
+
+        def _attr(el, name, default=None):
+            if el is None:
+                return default
+            return el.get(name, default)
+
+        title_el_1 = r.select_one("h2 span")
+        title_el_2 = r.select_one("a.a-link-normal h2 span")
+        parts = []
+        if title_el_1:
+            parts.append(_text(title_el_1))
+        if title_el_2 and _text(title_el_2):
+            parts.append(_text(title_el_2))
+        title = " ".join(parts) if parts else None
+        if not title:
+            h2 = r.select_one("h2") or r.select_one("a.a-link-normal")
+            title = _text(h2) if h2 else None
+
+        link_el = r.select_one("a.a-link-normal[href*='/dp/'], a.a-link-normal[href*='/gp/product/']") or r.select_one("a.a-link-normal")
+        href = _attr(link_el, "href") if link_el else None
+        link = ("https://www.amazon.in" + href) if href and href.startswith("/") else href
+
+        rating_el = r.select_one("span.a-icon-alt")
+        reviews_el = r.select_one(".s-underline-text")
+        bought_el = r.select_one("span.a-size-base.a-color-secondary")
+        rating = _text(rating_el)
+        reviews = _text(reviews_el)
+        bought = _text(bought_el)
+
+        items.append({"title": title, "link": link, "rating": rating, "reviews": reviews, "bought": bought})
+    return items
+
+
+def _scrape_amazon_search(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> List[Dict[str, Optional[str]]]:
+    """Amazon.in search scrape using Playwright (browser). Use when bs4 returns empty (e.g. JS-rendered page)."""
+    query = f"{model} {ram} {storage} {color}"
+    url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
+
+    items: List[Dict[str, Optional[str]]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(channel="chrome", headless=True)
+        page = browser.new_page()
+
+        page.goto(url)
+        page.wait_for_selector("div[data-component-type='s-search-result']")
+
+        results = page.query_selector_all("div[data-component-type='s-search-result']")
+
+        for r in results[:limit]:
+            # Amazon sometimes splits the title text across multiple elements.
+            # First try to join the key spans, then fall back to full h2/link text.
+            title_el_1 = r.query_selector("h2 span")
+            title_el_2 = r.query_selector("a.a-link-normal h2 span")
+
+            parts: list[str] = []
+            if title_el_1:
+                parts.append(title_el_1.inner_text())
+            if title_el_2:
+                parts.append(title_el_2.inner_text())
+
+            title: Optional[str]
+            if parts:
+                title = " ".join(parts)
+            else:
+                full_h2 = r.query_selector("h2") or r.query_selector("a.a-link-normal")
+                title = full_h2.inner_text() if full_h2 else None
+
+            link_el = r.query_selector("a.a-link-normal")
+            rating_el = r.query_selector("span.a-icon-alt")
+            reviews_el = r.query_selector(".s-underline-text")
+            bought_el = r.query_selector("span.a-size-base.a-color-secondary")
+
+            href = link_el.get_attribute("href") if link_el else None
+            link = "https://amazon.in" + href if href else None
+            rating = rating_el.inner_text() if rating_el else None
+            reviews = reviews_el.inner_text() if reviews_el else None
+            bought = bought_el.inner_text() if bought_el else None
+
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "rating": rating,
+                    "reviews": reviews,
+                    "bought": bought,
+                }
+            )
+
+        browser.close()
+
+    return items
+
+
+# Headers for requests-based Flipkart scrape (403 common without browser)
+_FLIPKART_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-IN,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://www.flipkart.com/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+}
+
+
+def _parse_flipkart_rating_line(raw: Optional[str]) -> Optional[str]:
+    """
+    Parse Flipkart rating line where star rating (e.g. 4.6) is concatenated with
+    count (e.g. 2,73,129 Ratings & 9,540 Reviews) into one string like
+    '4.62,73,129 Ratings & 9,540 Reviews'. Returns a clear formatted string.
+    """
+    if not raw or not raw.strip():
+        return raw
+    raw = raw.strip()
+    # Match leading "X.X" (star rating) so we can separate it from the count
+    m = re.match(r"^(\d\.\d)(.*)$", raw)
+    if m:
+        star, rest = m.group(1), m.group(2).strip()
+        if rest:
+            return f"{star} ★ | {rest}"
+        return f"{star} ★"
+    return raw
+
+
+def _scrape_flipkart_search_bs4(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 10,
+) -> List[Dict[str, Optional[str]]]:
+    """Flipkart search scrape using requests + BeautifulSoup (no browser). Uses curl_cffi if available to avoid 403."""
+    query = f"{model} {ram} {storage} {color}"
+    base_url = "https://www.flipkart.com/search?q="
+    url = base_url + query.replace(" ", "%20")
+    items: List[Dict[str, Optional[str]]] = []
+    try:
+        if _curl_requests is not None:
+            res = _curl_requests.get(url, headers=_FLIPKART_HEADERS, timeout=30, impersonate="chrome")
+        else:
+            res = requests.get(url, headers=_FLIPKART_HEADERS, timeout=30)
+        if res.status_code != 200:
+            logger.warning("Flipkart bs4 returned %s (e.g. 403 = bot block)", res.status_code)
+            return items
+    except Exception as e:
+        logger.warning("Flipkart bs4 request failed: %s", e)
+        return items
+    soup = BeautifulSoup(res.text, "lxml")
+    links = soup.select("a[href*='/p/']")
+    seen_hrefs: set = set()
+    for a in links:
+        if len(items) >= limit:
+            break
+        href = a.get("href")
+        if not href or href in seen_hrefs:
+            continue
+        seen_hrefs.add(href)
+        link = "https://www.flipkart.com" + href if href.startswith("/") else href
+        card = a.parent
+        while card and getattr(card, "name", None) != "div":
+            card = getattr(card, "parent", None)
+        if not card:
+            continue
+        card_text = card.get_text(separator="\n", strip=True) if card else ""
+        lines = [ln.strip() for ln in card_text.splitlines() if ln.strip()]
+        title = None
+        for line in lines:
+            if line.lower() in ("add to compare", "currently unavailable"):
+                continue
+            title = line
+            break
+        rating = None
+        for line in lines:
+            if "ratings" in line.lower():
+                rating = _parse_flipkart_rating_line(line)
+                break
+        price = None
+        price_str = card.find(string=re.compile(r"₹"))
+        if price_str:
+            parent = getattr(price_str, "parent", None)
+            price = parent.get_text(strip=True) if parent else (price_str.strip() if isinstance(price_str, str) else None)
+        items.append({"title": title, "link": link, "price": price, "rating": rating})
+    return items
+
+
+def _scrape_flipkart_search(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 10,
+) -> List[Dict[str, Optional[str]]]:
+    """Flipkart search scrape using Playwright (browser). Use when bs4 returns empty."""
+    query = f"{model} {ram} {storage} {color}"
+    base_url = "https://www.flipkart.com/search?q="
+    url = base_url + query.replace(" ", "%20")
+
+    items: List[Dict[str, Optional[str]]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        page.goto(url, timeout=60000)
+        page.wait_for_load_state("networkidle")
+
+        products = page.locator("a[href*='/p/']")
+        count = min(products.count(), limit)
+
+        for i in range(count):
+            product = products.nth(i)
+
+            # Full text for this product link
+            full_text = product.inner_text() if product else ""
+            lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+
+            # Pick a clean title line (skip utility lines like "Add to Compare", "Currently unavailable")
+            title: Optional[str] = None
+            for line in lines:
+                if line.lower() in ("add to compare", "currently unavailable"):
+                    continue
+                title = line
+                break
+
+            # Rating line (contains "Ratings" / "ratings")
+            rating: Optional[str] = None
+            for line in lines:
+                if "ratings" in line.lower():
+                    rating = _parse_flipkart_rating_line(line)
+                    break
+
+            # Link
+            href = product.get_attribute("href") if product else None
+            link = "https://www.flipkart.com" + href if href else None
+
+            # Move to parent card
+            card = product.locator("xpath=ancestor::div[1]") if product else None
+
+            # Price
+            price = None
+            if card:
+                price_el = card.locator("text=₹").first
+                if price_el.count() > 0:
+                    price = price_el.inner_text()
+
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "price": price,
+                    "rating": rating,
+                }
+            )
+
+        browser.close()
+
+    return items
+
+
+@app.post("/amazon-scrape", response_model=VelocityScrapeResponse)
+async def amazon_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
+    """
+    Scrape Amazon.in search results for a given device config.
+    Uses requests + BeautifulSoup first; falls back to Playwright if bs4 returns no results.
+    """
+    loop = asyncio.get_running_loop()
+    items_raw = await loop.run_in_executor(
+        None,
+        _scrape_amazon_search_bs4,
+        req.model,
+        req.ram,
+        req.storage,
+        req.color,
+        req.limit,
+    )
+    # If bs4 got nothing (e.g. page is JS-rendered or blocked), try Playwright
+    if not items_raw:
+        try:
+            items_raw = await loop.run_in_executor(
+                None,
+                _scrape_amazon_search,
+                req.model,
+                req.ram,
+                req.storage,
+                req.color,
+                req.limit,
+            )
+        except Exception as e:
+            logger.warning("Amazon Playwright fallback failed: %s", e)
+
+    # Send scraped items + a filtering query to Bedrock so it can
+    # return only the items that best match the requested config.
+    filter_query = (
+        "Filter the following Amazon search results for devices.\n"
+        "Return ONLY the items that clearly match this desired configuration and are ACTUAL PHONE HANDSETS, "
+        "not accessories:\n\n"
+        f"- Model: {req.model}\n"
+        f"- RAM: {req.ram}\n"
+        f"- Storage: {req.storage}\n"
+        f"- Color: {req.color}\n\n"
+        "IMPORTANT:\n"
+        "- EXCLUDE accessories such as cases, covers, screen protectors, tempered glass, chargers, cables,\n"
+        "  stands, holders, stickers, camera lens protectors, MagSafe rings, bands, straps, etc.\n"
+        "- ONLY keep listings that are the actual phone/handset itself.\n"
+        "- If there are zero matching phone listings, return an empty JSON array [].\n\n"
+        "Devices are provided as a JSON array.\n"
+        "Your response MUST be a JSON array of device objects using the same keys "
+        "(`title`, `link`, `rating`, `reviews`, `bought`) and nothing else."
+    )
+
+    bedrock_text = analyze_with_bedrock(
+        devices=items_raw,
+        query=filter_query,
+        instructions=(
+            "You are a strict filter over a list of scraped marketplace items.\n"
+            "Given a desired device configuration and a JSON array of items, "
+            "you MUST respond ONLY with a JSON array of the items that best match "
+            "the desired configuration.\n\n"
+            f"Hard rule: the device title MUST contain the exact model string '{req.model}' "
+            "in a case-insensitive way; if the title does not contain that exact substring, "
+            "exclude the item.\n"
+            "Soft rules: RAM, storage and color should match when possible, but if they "
+            "are missing or differ slightly while the model title still matches, you may "
+            "still include the item.\n\n"
+            "Critical exclusions:\n"
+            "- Do NOT return accessories: cases, covers, screen protectors, tempered glass, chargers, cables,\n"
+            "  stands, holders, stickers, camera lens protectors, MagSafe rings, bands, straps, or similar.\n"
+            "- Only include items that are clearly the phone/handset itself.\n"
+            "- If no phone handsets match, return an empty JSON array [].\n\n"
+            "Do not include any explanation text; return only raw JSON."
+        ),
+        max_tokens=800,
+        temperature=0.0,
+    )
+
+    filtered_items: list[dict] = items_raw
+    try:
+        parsed = json.loads(bedrock_text)
+        if isinstance(parsed, list):
+            filtered_items = [x for x in parsed if isinstance(x, dict)]
+    except Exception:
+        # If Bedrock doesn't return valid JSON, fall back to unfiltered items.
+        pass
+
+    # Extra safety: enforce that title contains the exact model string
+    # and that we are not returning obvious accessories.
+    model_norm = (req.model or "").lower()
+    accessory_keywords = [
+        "case",
+        "cover",
+        "screen protector",
+        "tempered glass",
+        "glass",
+        "charger",
+        "cable",
+        "adapter",
+        "stand",
+        "holder",
+        "ring",
+        "band",
+        "strap",
+        "lens protector",
+        "magnetic case",
+        "back cover",
+    ]
+    if model_norm:
+        filtered_items = [
+            item
+            for item in filtered_items
+            if isinstance(item.get("title"), str)
+            and model_norm in item["title"].lower()
+            and not any(kw in item["title"].lower() for kw in accessory_keywords)
+        ]
+
+    items = [VelocityScrapeItem(**item) for item in filtered_items]
+
+    # Everything that was scraped but not returned in `results`
+    matched_keys = {(i.title, i.link) for i in items}
+    non_matching_raw = [
+        item
+        for item in items_raw
+        if (item.get("title"), item.get("link")) not in matched_keys
+    ]
+    non_matching_items = [VelocityScrapeItem(**item) for item in non_matching_raw]
+
+    return VelocityScrapeResponse(
+        query={
+            "model": req.model,
+            "ram": req.ram,
+            "storage": req.storage,
+            "color": req.color,
+            "limit": req.limit,
+        },
+        results=items,
+        non_matching=non_matching_items,
+    )
+
+
+@app.post("/flipkart-scrape", response_model=FlipkartScrapeResponse)
+async def flipkart_scrape(req: VelocityScrapeRequest) -> FlipkartScrapeResponse:
+    """
+    Scrape Flipkart search results for a given device config and filter with Bedrock.
+    Uses requests + BeautifulSoup first; falls back to Playwright if bs4 returns no results.
+    """
+    loop = asyncio.get_running_loop()
+    # Temporarily disable bs4 scraper so we always trigger the Playwright fallback
+    items_raw: list[dict] = []
+    try:
+        items_raw = await loop.run_in_executor(
+            None,
+            _scrape_flipkart_search,
+            req.model,
+            req.ram,
+            req.storage,
+            req.color,
+            req.limit,
+        )
+    except Exception as e:
+        logger.warning("Flipkart Playwright fallback failed: %s", e)
+
+    filter_query = (
+        "Filter the following Flipkart search results for devices.\n"
+        "Return ONLY the items that clearly match this desired configuration:\n\n"
+        f"- Model: {req.model}\n"
+        f"- RAM: {req.ram}\n"
+        f"- Storage: {req.storage}\n"
+        f"- Color: {req.color}\n\n"
+        "Devices are provided as a JSON array.\n"
+        "Your response MUST be a JSON array of device objects using the same keys "
+        "(`title`, `link`, `price`, `rating`) and nothing else."
+    )
+
+    bedrock_text = analyze_with_bedrock(
+        devices=items_raw,
+        query=filter_query,
+        instructions=(
+            "You are a strict filter over a list of scraped marketplace items from Flipkart.\n"
+            "Given a desired device configuration and a JSON array of items, "
+            "you MUST respond ONLY with a JSON array of the items that best match "
+            "the desired configuration.\n\n"
+            f"Hard rule: the device title MUST contain the exact model string '{req.model}' "
+            "in a case-insensitive way; if the title does not contain that exact substring, "
+            "exclude the item.\n"
+            "Soft rules: RAM, storage and color should match when possible, but if they "
+            "are missing or differ slightly while the model title still matches, you may "
+            "still include the item.\n"
+            "Do not include any explanation text; return only raw JSON."
+        ),
+        max_tokens=800,
+        temperature=0.0,
+    )
+
+    filtered_items: list[dict] = items_raw
+    try:
+        parsed = json.loads(bedrock_text)
+        if isinstance(parsed, list):
+            filtered_items = [x for x in parsed if isinstance(x, dict)]
+    except Exception:
+        # If Bedrock doesn't return valid JSON, fall back to unfiltered items.
+        pass
+
+    # Extra safety: enforce that title contains the exact model string.
+    model_norm = (req.model or "").lower()
+    if model_norm:
+        filtered_items = [
+            item
+            for item in filtered_items
+            if isinstance(item.get("title"), str) and model_norm in item["title"].lower()
+        ]
+
+    items = [FlipkartScrapeItem(**item) for item in filtered_items]
+
+    matched_keys = {(i.title, i.link) for i in items}
+    non_matching_raw = [
+        item
+        for item in items_raw
+        if (item.get("title"), item.get("link")) not in matched_keys
+    ]
+    non_matching_items = [FlipkartScrapeItem(**item) for item in non_matching_raw]
+
+    return FlipkartScrapeResponse(
+        query={
+            "model": req.model,
+            "ram": req.ram,
+            "storage": req.storage,
+            "color": req.color,
+            "limit": req.limit,
+        },
+        results=items,
+        non_matching=non_matching_items,
+    )
+
+
+async def _fetch_velocity_signals_for_device(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> tuple[list[str], list[str], list[VelocityScrapeItem], list[FlipkartScrapeItem]]:
+    """
+    Call amazon-scrape and flipkart-scrape for a given device config.
+    Returns (amazon_bought_tags, flipkart_rating_tags, amazon_items, flipkart_items)
+    for use in API response (tags for Bedrock context, items for UI with title/link/rating/reviews/bought).
+    """
+    amazon_bought_tags: list[str] = []
+    flipkart_rating_tags: list[str] = []
+    amazon_items: list[VelocityScrapeItem] = []
+    flipkart_items: list[FlipkartScrapeItem] = []
+
+    req = VelocityScrapeRequest(
+        model=model,
+        ram=ram,
+        storage=storage,
+        color=color,
+        limit=limit,
+    )
+
+    try:
+        amazon_resp = await amazon_scrape(req)
+        for item in amazon_resp.results or []:
+            if isinstance(item.bought, str) and item.bought.strip():
+                amazon_bought_tags.append(item.bought.strip())
+            amazon_items.append(item)
+    except Exception as e:
+        logger.exception("Velocity: amazon-scrape failed for model=%s: %s", model, e)
+
+    try:
+        flipkart_resp = await flipkart_scrape(req)
+        for item in flipkart_resp.results or []:
+            if isinstance(item.rating, str) and item.rating.strip():
+                flipkart_rating_tags.append(item.rating.strip())
+            flipkart_items.append(item)
+    except Exception as e:
+        logger.exception("Velocity: flipkart-scrape failed for model=%s: %s", model, e)
+
+    return amazon_bought_tags, flipkart_rating_tags, amazon_items, flipkart_items
+
+
 ALLOWED_NETWORK_TYPES = ("5G", "4G", "3G")
 ALLOWED_CONDITION_TIERS = (
     "superb", "fair", "good",
@@ -390,6 +1019,7 @@ class AnalyzeDevicesRequestItem(BaseModel):
     network_type: str = Field(..., max_length=10)
     condition_tier: str = Field(..., min_length=1, max_length=20)
     warranty_months: str = Field(..., max_length=5)
+    color: str = Field("", max_length=50)  # optional; used for velocity (Amazon/Flipkart) signals
 
     @field_validator("network_type")
     @classmethod
@@ -434,6 +1064,11 @@ class AnalyzeDevicesResponseItem(BaseModel):
     data_found_in: list[str] = []  # e.g. ["Ovantica", "ReFit Global", "Cashify"] — sources that had scraped listings
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
+    # Velocity: tags (for Bedrock) and full items (for UI: title, link, rating, reviews, bought)
+    amazon_bought_tags: list[str] = []
+    flipkart_rating_tags: list[str] = []
+    amazon_velocity_items: list[VelocityScrapeItem] = []
+    flipkart_velocity_items: list[FlipkartScrapeItem] = []
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem] = Field(
@@ -727,9 +1362,34 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
 
     results = []
     for idx, d in enumerate(devices, start=1):
+        # Fetch velocity signals (Amazon 'bought' tags and Flipkart ratings) and full items for UI.
+        amazon_bought_tags, flipkart_rating_tags, amazon_items, flipkart_items = await _fetch_velocity_signals_for_device(
+            model=d.model,
+            ram=d.ram_gb,
+            storage=d.storage_gb,
+            color=d.color,
+            limit=5,
+        )
+
+        velocity_lines: list[str] = []
+        if amazon_bought_tags:
+            velocity_lines.append(
+                "Amazon velocity (bought in past month tags): "
+                + " | ".join(amazon_bought_tags[:5])
+            )
+        if flipkart_rating_tags:
+            velocity_lines.append(
+                "Flipkart rating signals: " + " | ".join(flipkart_rating_tags[:5])
+            )
+
+        velocity_section = ""
+        if velocity_lines:
+            velocity_section = "\nVelocity signals:\n" + "\n".join(f"- {line}" for line in velocity_lines) + "\n"
+
         query_string = (
             f"Device Input:\nBrand: {d.brand}\nModel: {d.model}\nStorage: {d.storage_gb}GB\n"
             f"RAM: {d.ram_gb}GB\nNetwork: {d.network_type}\nCondition: {d.condition_tier}\nWarranty: {d.warranty_months} months\n"
+            f"{velocity_section}"
         )
         encoded = urllib.parse.quote_plus(" ".join(x for x in [d.brand, d.model] if x))
         device_source_urls = [
@@ -748,6 +1408,10 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
             data_found_in=data_found_in or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in surl_list] if surl_list else [],
+            amazon_bought_tags=amazon_bought_tags,
+            flipkart_rating_tags=flipkart_rating_tags,
+            amazon_velocity_items=amazon_items,
+            flipkart_velocity_items=flipkart_items,
         ))
     job["results"] = [r.model_dump() for r in results]
     job["status"] = "finished"
@@ -890,6 +1554,13 @@ async def analyze_devices_status(job_id: str) -> dict[str, Any]:
 async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
+        amazon_bought_tags, flipkart_rating_tags, amazon_items, flipkart_items = await _fetch_velocity_signals_for_device(
+            model=d.model,
+            ram=d.ram_gb,
+            storage=d.storage_gb,
+            color=d.color,
+            limit=5,
+        )
         price, explanation, flags, source_url, source_urls, data_found_in = await _run_bedrock_analysis(
             idx,
             d.brand,
@@ -908,8 +1579,12 @@ async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             data_found_in=data_found_in or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
+            amazon_bought_tags=amazon_bought_tags,
+            flipkart_rating_tags=flipkart_rating_tags,
+            amazon_velocity_items=amazon_items,
+            flipkart_velocity_items=flipkart_items,
         ))
-        
+
     return AnalyzeDevicesResponse(results=results)
 
 # --- Database Endpoints ---
