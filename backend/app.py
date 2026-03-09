@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, List, Dict
 
 import asyncio
 import csv
@@ -18,6 +18,7 @@ from database import engine, Base, get_db
 from models import RunModel, KnowledgeBaseEntryModel
 from pydantic import BaseModel, Field, field_validator, model_validator
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
 from bedrock_helper import analyze_with_bedrock
 
@@ -123,6 +124,28 @@ class ScrapeResponse(BaseModel):
     query: str
     count: int
     devices: list[Device]
+
+
+class VelocityScrapeRequest(BaseModel):
+    model: str = Field(..., min_length=1, max_length=200)
+    ram: str = Field(..., min_length=1, max_length=50)
+    storage: str = Field(..., min_length=1, max_length=50)
+    color: str = Field(..., min_length=1, max_length=50)
+    limit: int = Field(5, ge=1, le=20)
+
+
+class VelocityScrapeItem(BaseModel):
+    title: Optional[str] = None
+    link: Optional[str] = None
+    rating: Optional[str] = None
+    reviews: Optional[str] = None
+    bought: Optional[str] = None
+
+
+class VelocityScrapeResponse(BaseModel):
+    query: dict
+    results: List[VelocityScrapeItem]
+    non_matching: List[VelocityScrapeItem]
 
 
 # --- BrowserUse scraper ---
@@ -369,6 +392,167 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
     devices = [Device(**{k: v for k, v in d.items() if k in Device.model_fields}) for d in devices_dicts]
     return AnalyzeResponse(query=req.query, count=len(devices), devices=devices, analysis=analysis)
+
+
+def _scrape_amazon_search(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> List[Dict[str, Optional[str]]]:
+    query = f"{model} {ram} {storage} {color}"
+    url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
+
+    items: List[Dict[str, Optional[str]]] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        page.goto(url)
+        page.wait_for_selector("div[data-component-type='s-search-result']")
+
+        results = page.query_selector_all("div[data-component-type='s-search-result']")
+
+        for r in results[:limit]:
+            # Amazon sometimes splits the title text across multiple elements.
+            # First try to join the key spans, then fall back to full h2/link text.
+            title_el_1 = r.query_selector("h2 span")
+            title_el_2 = r.query_selector("a.a-link-normal h2 span")
+
+            parts: list[str] = []
+            if title_el_1:
+                parts.append(title_el_1.inner_text())
+            if title_el_2:
+                parts.append(title_el_2.inner_text())
+
+            title: Optional[str]
+            if parts:
+                title = " ".join(parts)
+            else:
+                full_h2 = r.query_selector("h2") or r.query_selector("a.a-link-normal")
+                title = full_h2.inner_text() if full_h2 else None
+
+            link_el = r.query_selector("a.a-link-normal")
+            rating_el = r.query_selector("span.a-icon-alt")
+            reviews_el = r.query_selector(".s-underline-text")
+            bought_el = r.query_selector("span.a-size-base.a-color-secondary")
+
+            href = link_el.get_attribute("href") if link_el else None
+            link = "https://amazon.in" + href if href else None
+            rating = rating_el.inner_text() if rating_el else None
+            reviews = reviews_el.inner_text() if reviews_el else None
+            bought = bought_el.inner_text() if bought_el else None
+
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "rating": rating,
+                    "reviews": reviews,
+                    "bought": bought,
+                }
+            )
+
+        browser.close()
+
+    return items
+
+
+@app.post("/velocity-scrape", response_model=VelocityScrapeResponse)
+async def velocity_scrape(req: VelocityScrapeRequest) -> VelocityScrapeResponse:
+    """
+    Scrape Amazon.in search results for a given device config.
+
+    This reuses the Playwright logic from the standalone script and wraps it
+    in the main FastAPI app as /velocity-scrape.
+    """
+    loop = asyncio.get_running_loop()
+    items_raw = await loop.run_in_executor(
+        None,
+        _scrape_amazon_search,
+        req.model,
+        req.ram,
+        req.storage,
+        req.color,
+        req.limit,
+    )
+
+    # Send scraped items + a filtering query to Bedrock so it can
+    # return only the items that best match the requested config.
+    filter_query = (
+        "Filter the following Amazon search results for devices.\n"
+        "Return ONLY the items that clearly match this desired configuration:\n\n"
+        f"- Model: {req.model}\n"
+        f"- RAM: {req.ram}\n"
+        f"- Storage: {req.storage}\n"
+        f"- Color: {req.color}\n\n"
+        "Devices are provided as a JSON array.\n"
+        "Your response MUST be a JSON array of device objects using the same keys "
+        "(`title`, `link`, `rating`, `reviews`, `bought`) and nothing else."
+    )
+
+    bedrock_text = analyze_with_bedrock(
+        devices=items_raw,
+        query=filter_query,
+        instructions=(
+            "You are a strict filter over a list of scraped marketplace items.\n"
+            "Given a desired device configuration and a JSON array of items, "
+            "you MUST respond ONLY with a JSON array of the items that best match "
+            "the desired configuration.\n\n"
+            f"Hard rule: the device title MUST contain the exact model string '{req.model}' "
+            "in a case-insensitive way; if the title does not contain that exact substring, "
+            "exclude the item.\n"
+            "Soft rules: RAM, storage and color should match when possible, but if they "
+            "are missing or differ slightly while the model title still matches, you may "
+            "still include the item.\n"
+            "Do not include any explanation text; return only raw JSON."
+        ),
+        max_tokens=800,
+        temperature=0.0,
+    )
+
+    filtered_items: list[dict] = items_raw
+    try:
+        parsed = json.loads(bedrock_text)
+        if isinstance(parsed, list):
+            filtered_items = [x for x in parsed if isinstance(x, dict)]
+    except Exception:
+        # If Bedrock doesn't return valid JSON, fall back to unfiltered items.
+        pass
+
+    # Extra safety: enforce that title contains the exact model string.
+    model_norm = (req.model or "").lower()
+    if model_norm:
+        filtered_items = [
+            item
+            for item in filtered_items
+            if isinstance(item.get("title"), str) and model_norm in item["title"].lower()
+        ]
+
+    items = [VelocityScrapeItem(**item) for item in filtered_items]
+
+    # Everything that was scraped but not returned in `results`
+    matched_keys = {(i.title, i.link) for i in items}
+    non_matching_raw = [
+        item
+        for item in items_raw
+        if (item.get("title"), item.get("link")) not in matched_keys
+    ]
+    non_matching_items = [VelocityScrapeItem(**item) for item in non_matching_raw]
+
+    return VelocityScrapeResponse(
+        query={
+            "model": req.model,
+            "ram": req.ram,
+            "storage": req.storage,
+            "color": req.color,
+            "limit": req.limit,
+        },
+        results=items,
+        non_matching=non_matching_items,
+    )
 
 
 ALLOWED_NETWORK_TYPES = ("5G", "4G", "3G")
