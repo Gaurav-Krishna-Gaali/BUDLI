@@ -184,6 +184,9 @@ export interface AnalyzeDevicesStatusResponse {
     data_found_in?: string[]
     source_url?: string
     source_urls?: Array<{ source: string; url: string }>
+    // Optional velocity signals from backend
+    amazon_bought_tags?: string[]
+    flipkart_rating_tags?: string[]
   }>
   scrape_results?: Record<string, BrowserScrapeRow[]>
 }

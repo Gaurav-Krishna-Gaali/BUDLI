@@ -506,25 +506,35 @@ export default function NewRunPage() {
                             Amazon ({amazonResults.length})
                           </p>
                           <ul className="space-y-1">
-                            {amazonResults.slice(0, 3).map((item, i) => (
-                              <li key={i} className="text-[11px] text-muted-foreground">
-                                {item.link ? (
-                                  <a
-                                    href={item.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 hover:underline"
-                                  >
-                                    <span className="truncate max-w-[180px] inline-block align-middle">
-                                      {item.title ?? "—"}
-                                    </span>
-                                    <ExternalLink className="w-3 h-3 shrink-0" />
-                                  </a>
-                                ) : (
-                                  <span>{item.title ?? "—"}</span>
-                                )}
-                              </li>
-                            ))}
+                            {amazonResults.slice(0, 3).map((item, i) => {
+                              const meta = [item.rating, item.reviews, item.bought]
+                                .filter(Boolean)
+                                .join(" • ")
+                              return (
+                                <li key={i} className="text-[11px] text-muted-foreground">
+                                  {item.link ? (
+                                    <a
+                                      href={item.link}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 hover:underline"
+                                    >
+                                      <span className="truncate max-w-[180px] inline-block align-middle">
+                                        {item.title ?? "—"}
+                                      </span>
+                                      <ExternalLink className="w-3 h-3 shrink-0" />
+                                    </a>
+                                  ) : (
+                                    <span>{item.title ?? "—"}</span>
+                                  )}
+                                  {meta && (
+                                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                                      {meta}
+                                    </p>
+                                  )}
+                                </li>
+                              )
+                            })}
                           </ul>
                         </div>
                       )}
@@ -535,13 +545,34 @@ export default function NewRunPage() {
                           </p>
                           <ul className="space-y-1">
                             {flipkartResults.slice(0, 3).map((item, i) => (
-                              <li key={i} className="text-[11px] text-muted-foreground flex items-center justify-between gap-2">
-                                <span className="truncate max-w-[150px]">
-                                  {item.title ?? "—"}
-                                </span>
-                                <span className="shrink-0 text-[11px] text-foreground">
-                                  {item.price ?? "—"}
-                                </span>
+                              <li key={i} className="text-[11px] text-muted-foreground">
+                                <div className="flex items-center justify-between gap-2">
+                                  {item.link ? (
+                                    <a
+                                      href={item.link}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 hover:underline"
+                                    >
+                                      <span className="truncate max-w-[150px] inline-block align-middle">
+                                        {item.title ?? "—"}
+                                      </span>
+                                      <ExternalLink className="w-3 h-3 shrink-0" />
+                                    </a>
+                                  ) : (
+                                    <span className="truncate max-w-[150px]">
+                                      {item.title ?? "—"}
+                                    </span>
+                                  )}
+                                  <span className="shrink-0 text-[11px] text-foreground">
+                                    {item.price ?? "—"}
+                                  </span>
+                                </div>
+                                {item.rating && (
+                                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                                    {item.rating}
+                                  </p>
+                                )}
                               </li>
                             ))}
                           </ul>

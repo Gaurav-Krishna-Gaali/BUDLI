@@ -1,78 +1,77 @@
-# import requests
-# from bs4 import BeautifulSoup
+"""
+Amazon.in search results scraper using requests + BeautifulSoup.
+Note: Amazon may serve different HTML or a captcha for non-browser requests.
+If you get no results, the page might be JS-rendered — use the Playwright path in app.py.
+"""
+import requests
+from bs4 import BeautifulSoup
 
-# # url = "https://www.amazon.in/OnePlus-Nord-CE5-Nexus-Blue/dp/B0FCMK41N9/"
-# url = "https://www.amazon.in/OnePlus-Nord-MediaTek-Dimensity-Infinity/dp/B0FCMKNCJ4"
+# Same selectors as Playwright version (search results page)
+MODEL = "iPhone 15 Pro Max"
+RAM = "8GB"
+STORAGE = "256GB"
+COLOR = "Blue"
 
-# headers = {
-#     "User-Agent": "Mozilla/5.0",
-#     "Accept-Language": "en-US,en;q=0.9"
-# }
+QUERY = f"{MODEL} {RAM} {STORAGE} {COLOR}"
+URL = "https://www.amazon.in/s?k=" + QUERY.replace(" ", "+")
 
-# res = requests.get(url, headers=headers)
-# soup = BeautifulSoup(res.text, "html.parser")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
-# # product title
-# title = soup.select_one("#productTitle")
-# product_name = title.get_text(strip=True) if title else None
+def _text(el):
+    if el is None:
+        return None
+    t = el.get_text(strip=True)
+    return t if t else None
 
-# # bought in past month
-# bought = soup.select_one("#social-proofing-faceout-title-tk_bought")
-# bought_text = bought.get_text(strip=True) if bought else None
+def _attr(el, name, default=None):
+    if el is None:
+        return default
+    return el.get(name, default)
 
-# print(product_name)
-# print(bought_text)
+def main():
+    print(URL)
+    res = requests.get(URL, headers=HEADERS, timeout=30)
+    res.raise_for_status()
+    soup = BeautifulSoup(res.text, "lxml")
 
-from playwright.sync_api import sync_playwright
-
-
-model = "iPhone 15 Pro Max"
-ram = "8GB"
-storage = "256GB"
-color = "Blue"
-
-query = f"{model} {ram} {storage} {color}"
-url = "https://www.amazon.in/s?k=" + query.replace(" ", "+")
-print(url)
-
-with sync_playwright() as p:
-
-    browser = p.chromium.launch(headless=True)
-    page = browser.new_page()
-
-    page.goto(url)
-    page.wait_for_selector("div[data-component-type='s-search-result']")
-
-    results = page.query_selector_all("div[data-component-type='s-search-result']")
-
+    # Search result cards (same data-component-type as Playwright)
+    results = soup.select("div[data-component-type='s-search-result']")
     for r in results[:5]:
-
-        # title_el =  r.query_selector("h2 span") + r.query_selector("a.a-link-normal h2 span")
-        title_el_1 = r.query_selector("h2 span")
-        title_el_2 = r.query_selector("a.a-link-normal h2 span")
-
+        # Title: join h2 span and a.a-link-normal h2 span
+        title_el_1 = r.select_one("h2 span")
+        title_el_2 = r.select_one("a.a-link-normal h2 span")
         parts = []
         if title_el_1:
-            parts.append(title_el_1.inner_text())
-        if title_el_2:
-            parts.append(title_el_2.inner_text())
-
+            parts.append(_text(title_el_1))
+        if title_el_2 and _text(title_el_2):
+            parts.append(_text(title_el_2))
         title = " ".join(parts) if parts else None
+        if not title and (title_el_1 or title_el_2):
+            title = _text(title_el_1 or title_el_2)
+        if not title:
+            h2 = r.select_one("h2") or r.select_one("a.a-link-normal")
+            title = _text(h2) if h2 else None
 
-        link_el = r.query_selector("a.a-link-normal")
+        link_el = r.select_one("a.a-link-normal[href*='/dp/'], a.a-link-normal[href*='/gp/product/']")
+        if not link_el:
+            link_el = r.select_one("a.a-link-normal")
+        href = _attr(link_el, "href") if link_el else None
+        link = ("https://www.amazon.in" + href) if href and href.startswith("/") else href
 
-        rating_el = r.query_selector("span.a-icon-alt")
-        reviews_el = r.query_selector(".s-underline-text")
+        rating_el = r.select_one("span.a-icon-alt")
+        reviews_el = r.select_one(".s-underline-text")
+        bought_el = r.select_one("span.a-size-base.a-color-secondary")
 
-        bought_el = r.query_selector(
-            "span.a-size-base.a-color-secondary"
-        )
-
-        # title = title_el.inner_text() if title_el else None
-        link = "https://amazon.in" + link_el.get_attribute("href") if link_el else None
-        rating = rating_el.inner_text() if rating_el else None
-        reviews = reviews_el.inner_text() if reviews_el else None
-        bought = bought_el.inner_text() if bought_el else None
+        rating = _text(rating_el)
+        reviews = _text(reviews_el)
+        bought = _text(bought_el)
 
         print("TITLE:", title)
         print("LINK:", link)
@@ -81,4 +80,5 @@ with sync_playwright() as p:
         print("BOUGHT:", bought)
         print("------------")
 
-    browser.close()
+if __name__ == "__main__":
+    main()

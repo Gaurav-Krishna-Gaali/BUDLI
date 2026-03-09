@@ -420,7 +420,7 @@ def _scrape_amazon_search(
     items: List[Dict[str, Optional[str]]] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(channel="chrome", headless=False)
         page = browser.new_page()
 
         page.goto(url)
@@ -487,7 +487,8 @@ def _scrape_flipkart_search(
     items: List[Dict[str, Optional[str]]] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(channel="chrome", headless=False)
+        
         page = browser.new_page()
 
         page.goto(url, timeout=60000)
@@ -762,6 +763,47 @@ async def flipkart_scrape(req: VelocityScrapeRequest) -> FlipkartScrapeResponse:
     )
 
 
+async def _fetch_velocity_signals_for_device(
+    model: str,
+    ram: str,
+    storage: str,
+    color: str,
+    limit: int = 5,
+) -> tuple[list[str], list[str]]:
+    """
+    Helper: call amazon-scrape and flipkart-scrape for a given device config
+    and extract Amazon 'bought in past month' tags and Flipkart rating strings.
+    """
+    amazon_bought_tags: list[str] = []
+    flipkart_rating_tags: list[str] = []
+
+    req = VelocityScrapeRequest(
+        model=model,
+        ram=ram,
+        storage=storage,
+        color=color,
+        limit=limit,
+    )
+
+    try:
+        amazon_resp = await amazon_scrape(req)
+        for item in amazon_resp.results or []:
+            if isinstance(item.bought, str) and item.bought.strip():
+                amazon_bought_tags.append(item.bought.strip())
+    except Exception as e:
+        logger.exception("Velocity: amazon-scrape failed for model=%s: %s", model, e)
+
+    try:
+        flipkart_resp = await flipkart_scrape(req)
+        for item in flipkart_resp.results or []:
+            if isinstance(item.rating, str) and item.rating.strip():
+                flipkart_rating_tags.append(item.rating.strip())
+    except Exception as e:
+        logger.exception("Velocity: flipkart-scrape failed for model=%s: %s", model, e)
+
+    return amazon_bought_tags, flipkart_rating_tags
+
+
 ALLOWED_NETWORK_TYPES = ("5G", "4G", "3G")
 ALLOWED_CONDITION_TIERS = (
     "superb", "fair", "good",
@@ -825,6 +867,9 @@ class AnalyzeDevicesResponseItem(BaseModel):
     data_found_in: list[str] = []  # e.g. ["Ovantica", "ReFit Global", "Cashify"] — sources that had scraped listings
     source_url: str  # backward compat: primary URL
     source_urls: list[SourceUrl] = []  # all scraped source URLs
+    # Optional velocity signals (for future UI use)
+    amazon_bought_tags: list[str] = []
+    flipkart_rating_tags: list[str] = []
 
 class AnalyzeDevicesRequest(BaseModel):
     devices: list[AnalyzeDevicesRequestItem] = Field(
@@ -1118,9 +1163,34 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
 
     results = []
     for idx, d in enumerate(devices, start=1):
+        # Fetch velocity signals (Amazon 'bought' tags and Flipkart ratings) for this config.
+        amazon_bought_tags, flipkart_rating_tags = await _fetch_velocity_signals_for_device(
+            model=d.model,
+            ram=d.ram_gb,
+            storage=d.storage_gb,
+            color=d.color,
+            limit=5,
+        )
+
+        velocity_lines: list[str] = []
+        if amazon_bought_tags:
+            velocity_lines.append(
+                "Amazon velocity (bought in past month tags): "
+                + " | ".join(amazon_bought_tags[:5])
+            )
+        if flipkart_rating_tags:
+            velocity_lines.append(
+                "Flipkart rating signals: " + " | ".join(flipkart_rating_tags[:5])
+            )
+
+        velocity_section = ""
+        if velocity_lines:
+            velocity_section = "\nVelocity signals:\n" + "\n".join(f"- {line}" for line in velocity_lines) + "\n"
+
         query_string = (
             f"Device Input:\nBrand: {d.brand}\nModel: {d.model}\nStorage: {d.storage_gb}GB\n"
             f"RAM: {d.ram_gb}GB\nNetwork: {d.network_type}\nCondition: {d.condition_tier}\nWarranty: {d.warranty_months} months\n"
+            f"{velocity_section}"
         )
         encoded = urllib.parse.quote_plus(" ".join(x for x in [d.brand, d.model] if x))
         device_source_urls = [
@@ -1139,6 +1209,8 @@ async def _run_analyze_devices_job(job_id: str, devices: list[AnalyzeDevicesRequ
             data_found_in=data_found_in or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in surl_list] if surl_list else [],
+            amazon_bought_tags=amazon_bought_tags,
+            flipkart_rating_tags=flipkart_rating_tags,
         ))
     job["results"] = [r.model_dump() for r in results]
     job["status"] = "finished"
@@ -1281,6 +1353,13 @@ async def analyze_devices_status(job_id: str) -> dict[str, Any]:
 async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
     results = []
     for idx, d in enumerate(req.devices, start=1):
+        amazon_bought_tags, flipkart_rating_tags = await _fetch_velocity_signals_for_device(
+            model=d.model,
+            ram=d.ram_gb,
+            storage=d.storage_gb,
+            color=d.color,
+            limit=5,
+        )
         price, explanation, flags, source_url, source_urls, data_found_in = await _run_bedrock_analysis(
             idx,
             d.brand,
@@ -1299,6 +1378,8 @@ async def analyze_devices(req: AnalyzeDevicesRequest) -> AnalyzeDevicesResponse:
             data_found_in=data_found_in or [],
             source_url=source_url or "",
             source_urls=[SourceUrl(**u) for u in source_urls] if source_urls else [],
+            amazon_bought_tags=amazon_bought_tags,
+            flipkart_rating_tags=flipkart_rating_tags,
         ))
         
     return AnalyzeDevicesResponse(results=results)
