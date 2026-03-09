@@ -27,8 +27,25 @@ with sync_playwright() as p:
     for i in range(count):
         product = products.nth(i)
 
-        # Title
-        title = product.inner_text()
+        # Full text for this product link
+        full_text = product.inner_text()
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+        print(f"lines: {lines}")
+
+        # Pick a clean title line (skip utility lines like "Add to Compare", "Currently unavailable")
+        title = None
+        for line in lines:
+            if line.lower() in ("add to compare", "currently unavailable"):
+                continue
+            title = line
+            break
+
+        # Rating line (contains "Ratings" / "ratings")
+        rating = None
+        for line in lines:
+            if "ratings" in line.lower():
+                rating = line
+                break
 
         # Link
         href = product.get_attribute("href")
@@ -40,10 +57,6 @@ with sync_playwright() as p:
         # Price
         price_el = card.locator("text=₹").first
         price = price_el.inner_text() if price_el.count() > 0 else None
-
-        # Rating
-        rating_el = card.locator("div:has-text('★')").first
-        rating = rating_el.inner_text() if rating_el.count() > 0 else None
 
         print("TITLE:", title)
         print("LINK:", link)

@@ -499,8 +499,24 @@ def _scrape_flipkart_search(
         for i in range(count):
             product = products.nth(i)
 
-            # Title
-            title = product.inner_text() if product else None
+            # Full text for this product link
+            full_text = product.inner_text() if product else ""
+            lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+
+            # Pick a clean title line (skip utility lines like "Add to Compare", "Currently unavailable")
+            title: Optional[str] = None
+            for line in lines:
+                if line.lower() in ("add to compare", "currently unavailable"):
+                    continue
+                title = line
+                break
+
+            # Rating line (contains "Ratings" / "ratings")
+            rating: Optional[str] = None
+            for line in lines:
+                if "ratings" in line.lower():
+                    rating = line
+                    break
 
             # Link
             href = product.get_attribute("href") if product else None
@@ -511,15 +527,10 @@ def _scrape_flipkart_search(
 
             # Price
             price = None
-            rating = None
             if card:
                 price_el = card.locator("text=₹").first
                 if price_el.count() > 0:
                     price = price_el.inner_text()
-
-                rating_el = card.locator("div:has-text('★')").first
-                if rating_el.count() > 0:
-                    rating = rating_el.inner_text()
 
             items.append(
                 {
